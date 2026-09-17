@@ -1,0 +1,1141 @@
+#!/usr/bin/env python3
+# scrills: skills you import instead of read. One stdlib file, driven from bash in any harness.
+#
+# A scrill is a folder in a .scrills directory: <name>/__init__.py whose module docstring is its
+# manual, opening with SKILL.md-style frontmatter. Two layers, project over user: the nearest
+# .scrills walking up from the cwd (never the user library, never the default ~/.scrills even
+# when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
+# aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
+# also hosts the generated .venv. A folder whose name starts with '_' is an invisible draft; a
+# folder whose name is not a valid identifier is ignored. A project scrill shadowing a different
+# user scrill is process-wide - other scrills' imports get the project one - so py and run say
+# so in one stderr line.
+#
+# The venv is the runtime; this CLI is a thin dispatcher. The resolver lives inside the venv
+# (site-packages/_scrills_pth.py + scrills.pth, rewritten atomically whenever this file's copy
+# differs): at every interpreter start it synthesizes the `scrills` package over the layer dirs
+# in $SCRILLS_LAYERS (else the user library), so siblings import relatively, one scrill imports
+# another with `from scrills import <name>`, and worker processes the venv python spawns can
+# import scrills too. The CLI relaunches itself onto the venv python when one exists, so the same
+# interpreter parses, gates, and runs - no version skew between check and execution. Every child
+# runs -I (cwd and PYTHONPATH can never shadow an import; project code belongs to the project's
+# own tooling) with pycache redirected to <home>/.pycache so committed .scrills folders stay
+# clean.
+#
+# `py` and `run` both execv the venv python, so the pid is real and signals stay natural. `py`
+# runs stdin once: stdout passes through, the trailing expression echoes like a REPL (capped at
+# $SCRILLS_ECHO_CAP chars, default 8192, 0 = uncapped), top level may await, the snippet runs in
+# a real __main__ module, and nothing persists between calls. Code travels to the child over
+# stdin, never argv, so secrets stay out of ps. `run <name>` executes a scrill that defines
+# main() as a program (console-scripts idiom: sys.argv is set, main()'s return value is the exit
+# code; an async main is awaited). The CLI refuses early only when the source parses and binds
+# `main` nowhere at module scope - guarded, tuple, star-import, class and module-__getattr__
+# bindings all pass to the boot, which gates after the import, under the interpreter that
+# actually runs the scrill. `install` hands everything after it to the venv's pip - the one
+# explicit write to the shared environment, never implicit. The version lives once, in SKILL.md's
+# frontmatter.
+#
+# Every py/run is registered by the runner, never by the scrill: a live card at
+# <home>/.runs/<pid>.json while it runs, one appended line in <home>/.runs/log.jsonl when it
+# ends. Metadata only - verb, name, a W3C-shaped run id (a valid TRACEPARENT in the environment
+# is joined, and the boot sets TRACEPARENT for everything the run starts, so chained runs share
+# one trace), pid, cwd, who, timing, exit, the scrills the run imported with their versions,
+# and on an uncaught exception its type and where it broke (for a compile error, where the
+# compiler found it; never a location inside this file's own plumbing) - never code, argv,
+# output, or the exception message. A scrill names the exits its main() chooses in a module
+# constant EXITS = {1: "no answer"}; such a run is recorded with status `outcome` and that
+# name beside it, instead of `error` - a scrill adds to the record, it never writes core's
+# own fields.
+# The card is written and flock'd before execv;
+# the lock rides the inherited fd into the run (the boot then marks it close-on-exec, so programs
+# the run launches never hold it - only pure forks do) and the kernel drops it on any death, so a
+# sweep probes the lock, not the pid: lock free = the run died uncleanly, turned into a `died` log
+# line - crash visibility with no supervisor, no recycled-pid ghosts (kill(pid, 0) remains only
+# as the fallback where flock is unsupported). The outcome line is written from an atexit hook,
+# after non-daemon threads joined, so `ok` means actually finished. `who` comes from
+# $SCRILLS_WHO when set (harness extensions and cron lines label themselves; the core sniffs no
+# vendor variables), else tty/detached. `ps` shows running, newly-found-dead, and the last 24h;
+# the log rotates once past 1 MiB, under a non-blocking flock so racing finishers never rotate
+# twice. Registry writes never break a run - any failure degrades to a no-op.
+#
+# Exit codes: 0 ok; 1 an exception in scrill or py code; 2 usage, unknown scrill, or not
+# runnable; install exits with pip's code.
+import ast
+import datetime
+import fcntl
+import glob
+import json
+import keyword
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+SCRIPT = os.path.realpath(__file__)
+SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
+USAGE = """usage: scrills <verb>
+  list               the library: names, frontmatter, what runs standalone
+  py                 run Python from stdin, once, with the library importable
+  run <name> ...     run a scrill that defines main() as a program
+  install <pkg> ...  install a package into the shared environment (pip)
+  ps                 runs: what's running now, what died, the last 24h
+  where              paths: layers, python, how to install a package
+  --version          the scrills version"""
+
+PTH_MODULE = """# scrills resolver (generated; do not edit - the CLI rewrites it when its template changes).
+# install() runs at every interpreter start in this venv, called by scrills.pth (a .pth import
+# line, processed through Python 3.17) or scrills.start (PEP 829, understood from 3.15 - the
+# same venv keeps working across that transition). It synthesizes the `scrills` package over the
+# layer directories in $SCRILLS_LAYERS (else the user library), so anything this python starts -
+# snippets, scrills, worker processes - can `from scrills import <name>`; and when the
+# interpreter got no pycache redirect of its own (spawned workers inherit -I but not -X), it
+# points bytecode caches at <home>/.pycache so committed .scrills folders stay clean.
+import importlib.machinery
+import os
+import sys
+import types
+
+
+def _home():
+    raw = os.environ.get("SCRILLS_HOME", "").strip() or os.path.join(os.path.expanduser("~"), ".scrills")
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+def _layers():
+    raw = os.environ.get("SCRILLS_LAYERS", "")
+    paths = [path for path in raw.split(os.pathsep) if path]
+    return paths or [_home()]
+
+
+def install():
+    if sys.pycache_prefix is None:
+        sys.pycache_prefix = os.path.join(_home(), ".pycache")
+    if "scrills" in sys.modules:
+        return
+    pkg = types.ModuleType("scrills")
+    pkg.__path__ = _layers()
+    pkg.__spec__ = importlib.machinery.ModuleSpec("scrills", None, is_package=True)
+    pkg.__spec__.submodule_search_locations = pkg.__path__
+    sys.modules["scrills"] = pkg
+"""
+
+FINISH = """import atexit, json, os, sys, time
+CARD = {card!r}
+CARD_PATH = {card_path!r}
+LOCK_FD = {lock_fd!r}
+LOG = {log!r}
+PREV = {prev!r}
+STARTED = {started!r}
+OUTCOME = {{}}
+try:
+    os.environ['TRACEPARENT'] = {traceparent!r}
+except Exception:
+    pass
+if LOCK_FD is not None:
+    try:
+        os.set_inheritable(LOCK_FD, False)
+    except OSError:
+        pass
+def _note_error(error):
+    try:
+        OUTCOME['error_type'] = type(error).__name__
+        layer_dirs = [path for path in os.environ.get('SCRILLS_LAYERS', '').split(os.pathsep) if path]
+        def ours(filename):
+            return filename == '<py>' or any(filename.startswith(layer + os.sep) for layer in layer_dirs)
+        spot = None
+        if isinstance(error, SyntaxError) and isinstance(error.filename, str) and error.lineno:
+            if ours(error.filename):
+                spot = (error.filename, error.lineno)
+        if spot is None:
+            last = scoped = None
+            tb = error.__traceback__
+            while tb is not None:
+                filename = tb.tb_frame.f_code.co_filename
+                if ours(filename):
+                    scoped = (filename, tb.tb_lineno)
+                elif not filename.startswith('<'):
+                    last = (filename, tb.tb_lineno)
+                tb = tb.tb_next
+            spot = scoped or last
+        if spot is not None:
+            OUTCOME['error_at'] = spot[0] + ':' + str(spot[1])
+    except Exception:
+        pass
+def _version_of(module):
+    doc = getattr(module, '__doc__', None) or ''
+    lines = [line.strip() for line in doc.strip().splitlines()]
+    if not lines or lines[0] != '---':
+        return None
+    for line in lines[1:]:
+        if line == '---':
+            return None
+        if line.startswith('version:'):
+            value = line[len('version:'):].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
+                value = value[1:-1]
+            return value or None
+    return None
+def _write_record():
+    if CARD is None or not OUTCOME:
+        return
+    try:
+        import fcntl
+        record = dict(CARD)
+        code = OUTCOME['exit']
+        if code == 0:
+            status = 'ok'
+        elif OUTCOME.get('outcome'):
+            status = 'outcome'
+        else:
+            status = 'error'
+        record.update(exit=code, status=status, ms=int((time.time() - STARTED) * 1000))
+        if status == 'outcome':
+            record['outcome'] = OUTCOME['outcome']
+        for key in ('error_type', 'error_at'):
+            if key in OUTCOME:
+                record[key] = OUTCOME[key]
+        names = sorted(set(name.split('.')[1] for name in sys.modules if name.startswith('scrills.')))
+        if names:
+            record['imported'] = dict((name, _version_of(sys.modules.get('scrills.' + name))) for name in names)
+        handle = open(LOG, 'a', encoding='utf-8')
+        try:
+            rotate = False
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                rotate = True
+            except BlockingIOError:
+                pass
+            except OSError:
+                rotate = True
+            if rotate and os.path.getsize(LOG) > 1048576:
+                os.replace(LOG, PREV)
+                handle.close()
+                handle = open(LOG, 'a', encoding='utf-8')
+            handle.write(json.dumps(record) + '\\n')
+        finally:
+            handle.close()
+        os.remove(CARD_PATH)
+    except Exception:
+        pass
+def _finish(code):
+    OUTCOME['exit'] = code
+    sys.exit(code)
+atexit.register(_write_record)
+"""
+
+PY_BODY = """import ast, asyncio, inspect, traceback, types
+code = sys.stdin.read()
+if not code.strip():
+    print("scrills py: no code on stdin. Pass it as a heredoc:\\n  scrills py <<'PY'\\n  ...\\n  PY", file=sys.stderr)
+    _finish(2)
+try:
+    ECHO_CAP = int(os.environ.get('SCRILLS_ECHO_CAP', '') or 8192)
+except ValueError:
+    ECHO_CAP = 8192
+sys.modules['_scrills_boot'] = sys.modules['__main__']
+mod = types.ModuleType('__main__')
+sys.modules['__main__'] = mod
+ns = mod.__dict__
+loop = None
+def _run(codeobj):
+    global loop
+    value = eval(codeobj, ns)
+    if codeobj.co_flags & inspect.CO_COROUTINE:
+        if loop is None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(value)
+    return value
+def _plumbing(filename):
+    return filename == '<string>' or (os.sep + 'asyncio' + os.sep) in filename
+def _echo(value):
+    text = repr(value)
+    if ECHO_CAP > 0 and len(text) > ECHO_CAP:
+        text = text[:ECHO_CAP] + '\\n… (+{:,} chars — print it or write it to a file)'.format(len(text) - ECHO_CAP)
+    print(text)
+status = 0
+flag = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+try:
+    tree = compile(code, '<py>', 'exec', ast.PyCF_ONLY_AST | flag)
+    trailing = None
+    if tree.body and isinstance(tree.body[-1], ast.Expr):
+        trailing = ast.Expression(tree.body.pop().value)
+    if tree.body:
+        _run(compile(tree, '<py>', 'exec', flag))
+    if trailing is not None:
+        value = _run(compile(trailing, '<py>', 'eval', flag))
+        if value is not None:
+            sys.stdout.flush()
+            _echo(value)
+except SystemExit as stop:
+    if stop.code is None:
+        status = 0
+    elif isinstance(stop.code, int):
+        status = stop.code
+    else:
+        print(stop.code, file=sys.stderr)
+        status = 1
+except BaseException as error:
+    _note_error(error)
+    tb = error.__traceback__
+    while tb is not None and _plumbing(tb.tb_frame.f_code.co_filename):
+        tb = tb.tb_next
+    sys.stdout.flush()
+    sys.stderr.write(''.join(traceback.format_exception(type(error), error, tb)))
+    status = 1
+finally:
+    if loop is not None:
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        except BaseException:
+            pass
+        loop.close()
+_finish(status)
+"""
+
+RUN_BODY = """import asyncio, importlib, inspect, traceback
+name = sys.argv.pop(1)
+code = 1
+chosen = False
+module = None
+try:
+    module = importlib.import_module('scrills.' + name)
+    entry = getattr(module, 'main', None)
+    if callable(entry):
+        sys.argv[0] = name
+        value = entry()
+        if inspect.iscoroutine(value):
+            value = asyncio.run(value)
+        if value is None:
+            code = 0
+        elif isinstance(value, int):
+            code = value
+            chosen = True
+        else:
+            print(value, file=sys.stderr)
+            code = 1
+    else:
+        print('scrills run: ' + name + ' defines no main(), so it only imports. Use it from py: from scrills import ' + name, file=sys.stderr)
+        code = 2
+except SystemExit as stop:
+    if stop.code is None:
+        code = 0
+    elif isinstance(stop.code, int):
+        code = stop.code
+        chosen = module is not None
+    else:
+        print(stop.code, file=sys.stderr)
+        code = 1
+except BaseException as error:
+    _note_error(error)
+    traceback.print_exc()
+    code = 1
+if chosen and code != 0:
+    try:
+        table = getattr(module, 'EXITS', None)
+        named = table.get(code) if isinstance(table, dict) else None
+        if isinstance(named, str) and named.strip():
+            OUTCOME['outcome'] = named.strip()
+    except Exception:
+        pass
+_finish(code)
+"""
+
+
+def fail(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def user_home():
+    raw = os.environ.get("SCRILLS_HOME", "").strip() or os.path.join(os.path.expanduser("~"), ".scrills")
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+def project_dir(home):
+    default = os.path.realpath(os.path.join(os.path.expanduser("~"), ".scrills"))
+    step = os.getcwd()
+    while True:
+        candidate = os.path.join(step, ".scrills")
+        if os.path.isdir(candidate):
+            real = os.path.realpath(candidate)
+            if real != os.path.realpath(home) and real != default:
+                try:
+                    owner = os.stat(candidate).st_uid
+                except OSError:
+                    owner = None
+                if owner is not None and owner != os.getuid():
+                    return None, (candidate, owner)
+                return candidate, None
+        parent = os.path.dirname(step)
+        if parent == step:
+            return None, None
+        step = parent
+
+
+def layers():
+    home = user_home()
+    project, foreign = project_dir(home)
+    found = []
+    if project is not None:
+        found.append(("project", project))
+    if os.path.isdir(home):
+        found.append(("user", home))
+    return home, found, foreign
+
+
+def warn_foreign(foreign):
+    if foreign is not None:
+        print(f"scrills: ignoring {foreign[0]} as the project layer - owned by uid {foreign[1]}, not you", file=sys.stderr)
+
+
+def warn_shadows(found):
+    layered = dict(found)
+    project, user = layered.get("project"), layered.get("user")
+    if not project or not user:
+        return
+    user_scan = scan(user)
+    names = sorted(
+        name
+        for name, entry in scan(project).items()
+        if name in user_scan and os.path.realpath(entry) != os.path.realpath(user_scan[name])
+    )
+    if names:
+        print(
+            f"scrills: project scrills shadow user ones for this run: {', '.join(names)}"
+            " (process-wide - imports inside other scrills get the project one)",
+            file=sys.stderr,
+        )
+
+
+def scan(directory):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return {}
+    found = {}
+    for name in names:
+        if name.startswith(("_", ".")) or not name.isidentifier():
+            continue
+        entry = os.path.join(directory, name, "__init__.py")
+        if os.path.isfile(entry):
+            found[name] = entry
+    return found
+
+
+def library(found_layers):
+    merged = {}
+    shadowed = []
+    for label, directory in found_layers:
+        for name, entry in scan(directory).items():
+            if name in merged:
+                shadowed.append((name, label))
+            else:
+                merged[name] = {"name": name, "entry": entry, "layer": label}
+    return merged, shadowed
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def manifest(entry):
+    source = read_text(entry)
+    if source is None:
+        return ["(unreadable)"], None
+    try:
+        doc = ast.get_docstring(ast.parse(source))
+    except (SyntaxError, ValueError) as error:
+        return [f"(doesn't parse: {error})"], None
+    if doc is None:
+        return ["(no module docstring, so it announces nothing)"], None
+    lines = doc.strip().split("\n")
+    if lines[0].strip() == "---":
+        for end in range(1, len(lines)):
+            if lines[end].strip() == "---":
+                return lines[: end + 1], "frontmatter"
+        return [lines[0]], "unclosed"
+    first = next((line.strip() for line in lines if line.strip()), "")
+    return ([first] if first else ["(empty docstring)"]), "prose"
+
+
+def frontmatter_fields(lines):
+    if len(lines) < 2 or lines[0].strip() != "---" or lines[-1].strip() != "---":
+        return None
+    fields = {}
+    for line in lines[1:-1]:
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line.strip())
+        if match:
+            value = match.group(2).strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            fields[match.group(1)] = value
+    return fields
+
+
+def notices(name, lines, kind):
+    found = []
+    if keyword.iskeyword(name):
+        found.append(f"(python keyword - `from scrills import {name}` won't parse; rename, or reach it via run/importlib)")
+    if kind == "unclosed":
+        return found + ["(frontmatter never closes - missing the second ---)"]
+    if kind == "prose":
+        return found + ["(no frontmatter - open the docstring with ---, name/description/version, ---)"]
+    if kind != "frontmatter":
+        return found
+    fields = frontmatter_fields(lines) or {}
+    stated = fields.get("name", "")
+    if stated and stated != name:
+        found.append(f"(frontmatter name '{stated}' differs from folder '{name}' - the folder name is the import name)")
+    for key in ("description", "version"):
+        if not fields.get(key):
+            found.append(f"(no {key} in frontmatter)")
+    return found
+
+
+def declares_main(tree):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "main":
+            return True
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "main" for target in node.targets):
+            return True
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "main":
+            return True
+        if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) == "main" for alias in node.names):
+            return True
+    return False
+
+
+def may_bind_main(tree):
+    if any(isinstance(node, (ast.Global, ast.Nonlocal)) and "main" in node.names for node in ast.walk(tree)):
+        return True
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+    matchers = tuple(kind for kind in (getattr(ast, "MatchAs", None), getattr(ast, "MatchStar", None)) if kind is not None)
+
+    def binds(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name in ("main", "__getattr__")
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            named = node.id if isinstance(node, ast.Name) else node.attr
+            return named == "main" and isinstance(node.ctx, ast.Store)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return any(alias.name == "*" or (alias.asname or alias.name.split(".")[0]) == "main" for alias in node.names)
+        if isinstance(node, ast.Call):
+            return isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec", "globals", "locals", "setattr", "vars")
+        return bool(matchers) and isinstance(node, matchers) and getattr(node, "name", None) == "main"
+
+    def visit(node):
+        if binds(node):
+            return True
+        children = list(ast.iter_child_nodes(node))
+        if isinstance(node, scopes):
+            body = node.body if isinstance(node.body, list) else [node.body]
+            children = [child for child in children if not any(child is statement for statement in body)]
+        return any(visit(child) for child in children)
+
+    return visit(tree)
+
+
+def parsed(entry):
+    source = read_text(entry)
+    if source is None:
+        return None
+    try:
+        return ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+
+
+def runnable(entry):
+    tree = parsed(entry)
+    return None if tree is None else declares_main(tree)
+
+
+def binds_main(entry):
+    tree = parsed(entry)
+    return None if tree is None else may_bind_main(tree)
+
+
+def venv_python(home):
+    return os.path.join(home, ".venv", "bin", "python")
+
+
+def write_ignore(directory):
+    path = os.path.join(directory, ".gitignore")
+    if not os.path.exists(path):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("*\n")
+
+
+def runs_dir(home):
+    return os.path.join(home, ".runs")
+
+
+def card_path(home, pid):
+    return os.path.join(runs_dir(home), f"{pid}.json")
+
+
+def log_path(home):
+    return os.path.join(runs_dir(home), "log.jsonl")
+
+
+def now_iso():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def who():
+    explicit = os.environ.get("SCRILLS_WHO", "").strip()
+    if explicit:
+        return explicit
+    try:
+        return "tty" if sys.stderr.isatty() else "detached"
+    except (OSError, ValueError):
+        return "detached"
+
+
+def lineage():
+    raw = os.environ.get("TRACEPARENT", "").strip().lower()
+    match = re.match(r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$", raw)
+    if match and match.group(1) != "ff" and set(match.group(2)) != {"0"} and set(match.group(3)) != {"0"}:
+        return match.group(2), match.group(3), match.group(4)
+    return os.urandom(16).hex(), None, "01"
+
+
+def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def append_log(home, record):
+    try:
+        directory = runs_dir(home)
+        os.makedirs(directory, exist_ok=True)
+        write_ignore(directory)
+        path = log_path(home)
+        handle = open(path, "a", encoding="utf-8")
+        try:
+            rotate = False
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                rotate = True
+            except BlockingIOError:
+                pass
+            except OSError:
+                rotate = True
+            if rotate and os.path.getsize(path) > 1048576:
+                os.replace(path, os.path.join(directory, "log.prev.jsonl"))
+                handle.close()
+                handle = open(path, "a", encoding="utf-8")
+            handle.write(json.dumps(record) + "\n")
+        finally:
+            handle.close()
+    except OSError:
+        pass
+
+
+def load_card(path):
+    text = read_text(path)
+    if text is None:
+        return None
+    try:
+        card = json.loads(text)
+    except ValueError:
+        return None
+    return card if isinstance(card, dict) else None
+
+
+def register(home, verb, name, layer, pid, run_id, trace, parent):
+    card = {"verb": verb, "name": name, "id": run_id, "trace": trace, "pid": pid, "cwd": os.getcwd(), "who": who(), "started": now_iso()}
+    if parent is not None:
+        card["parent"] = parent
+    if layer is not None:
+        card["layer"] = layer
+    try:
+        directory = runs_dir(home)
+        os.makedirs(directory, exist_ok=True)
+        write_ignore(directory)
+        path = card_path(home, pid)
+        stale = load_card(path) if os.path.exists(path) else None
+        if stale is not None:
+            append_log(home, {**stale, "status": "died", "pruned": now_iso()})
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
+        locked = None
+        try:
+            os.write(fd, json.dumps(card).encode("utf-8"))
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.set_inheritable(fd, True)
+                locked = fd
+            except OSError:
+                pass
+            os.replace(tmp, path)
+        except OSError:
+            os.close(fd)
+            raise
+        return card, locked
+    except OSError:
+        return None, None
+
+
+def held(path, pid):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return alive(pid)
+        return False
+    finally:
+        os.close(fd)
+
+
+def sweep(home):
+    running, died = [], []
+    directory = runs_dir(home)
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return running, died
+    for filename in names:
+        stem, extension = os.path.splitext(filename)
+        if extension != ".json" or not stem.isdigit():
+            continue
+        path = os.path.join(directory, filename)
+        card = load_card(path)
+        if card is None:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        pid = card["pid"] if isinstance(card.get("pid"), int) else int(stem)
+        if held(path, pid):
+            running.append(card)
+        else:
+            append_log(home, {**card, "status": "died", "pruned": now_iso()})
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            died.append(card)
+    return running, died
+
+
+def ensure_venv(home):
+    python = venv_python(home)
+    if os.path.exists(python):
+        return python
+    target = os.path.join(home, ".venv")
+    if os.path.lexists(python):
+        fail(
+            f"scrills: {python} points at a python that no longer exists (removed or upgraded).\n"
+            f"Rebuild the environment: rm -rf {target}  - then rerun, and reinstall any packages (scrills install ...)"
+        )
+    os.makedirs(runs_dir(home), exist_ok=True)
+    write_ignore(runs_dir(home))
+    with open(os.path.join(runs_dir(home), "venv.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.exists(python):
+            return python
+        print(f"creating the scrills environment at {target} (first run, a few seconds)", file=sys.stderr)
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", target],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if result.returncode != 0 or not os.path.exists(python):
+            detail = result.stdout.strip() or f"exit {result.returncode}"
+            fail(f"scrills: creating the environment at {target} failed: {detail}\nCreate it by hand: {sys.executable} -m venv {target}")
+        write_ignore(target)
+    return python
+
+
+def site_packages(home):
+    venv = os.path.join(home, ".venv")
+    cfg = read_text(os.path.join(venv, "pyvenv.cfg"))
+    if cfg:
+        for line in cfg.splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "version" and value.strip():
+                stated = os.path.join(venv, "lib", "python" + ".".join(value.strip().split(".")[:2]), "site-packages")
+                if os.path.isdir(stated):
+                    return stated
+                break
+
+    def order(path):
+        found = re.match(r"python(\d+)\.(\d+)$", os.path.basename(os.path.dirname(path)))
+        return (int(found.group(1)), int(found.group(2))) if found else (0, 0)
+
+    matches = sorted(glob.glob(os.path.join(venv, "lib", "python*", "site-packages")), key=order)
+    return matches[-1] if matches else None
+
+
+def ensure_pth(home):
+    site = site_packages(home)
+    if site is None:
+        fail(f"scrills: {os.path.join(home, '.venv')} has no site-packages; delete it and rerun to rebuild")
+    wrote = False
+    for filename, text in (
+        ("_scrills_pth.py", PTH_MODULE),
+        ("scrills.pth", "import _scrills_pth; _scrills_pth.install()\n"),
+        ("scrills.start", "_scrills_pth:install\n"),
+    ):
+        path = os.path.join(site, filename)
+        if read_text(path) == text:
+            continue
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.replace(tmp, path)
+            wrote = True
+        except OSError as error:
+            fail(f"scrills: cannot install the resolver at {path}: {error}\nFix the permissions, or delete {os.path.join(home, '.venv')} and rerun")
+    if wrote:
+        check = subprocess.run(
+            [venv_python(home), "-I", "-c", "import scrills"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if check.returncode != 0:
+            detail = (check.stdout or "").strip() or f"exit {check.returncode}"
+            fail(
+                f"scrills: the resolver was written to {site}, but this venv's python does not run it: {detail}\n"
+                f"Rebuild the environment: rm -rf {os.path.join(home, '.venv')}  - then rerun"
+            )
+
+
+def ensure_runtime(home):
+    python = ensure_venv(home)
+    ensure_pth(home)
+    for folder in (".pycache", ".state"):
+        try:
+            path = os.path.join(home, folder)
+            os.makedirs(path, exist_ok=True)
+            write_ignore(path)
+        except OSError:
+            pass
+    return python
+
+
+def child_flags(home):
+    return ["-I", "-X", "pycache_prefix=" + os.path.join(home, ".pycache")]
+
+
+def finish_block(home, card, lock_fd, started, run_id, trace, flags):
+    return FINISH.format(
+        card=card,
+        card_path=card_path(home, os.getpid()),
+        lock_fd=lock_fd,
+        log=log_path(home),
+        prev=os.path.join(runs_dir(home), "log.prev.jsonl"),
+        started=started,
+        traceparent="00-" + trace + "-" + run_id + "-" + flags,
+    )
+
+
+def version():
+    text = read_text(SKILL_FILE)
+    if text is None:
+        return "unknown (SKILL.md missing next to the script - reinstall keeping the scrills/ folder intact)"
+    inside = False
+    under_metadata = False
+    for line in text.splitlines():
+        if line.strip() == "---":
+            if inside:
+                break
+            inside = True
+            continue
+        if not inside:
+            continue
+        if re.match(r"^\S", line):
+            under_metadata = line.strip() == "metadata:"
+            continue
+        match = re.match(r"^\s+version:\s*(\S+)\s*$", line) if under_metadata else None
+        if match:
+            value = match.group(1)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            return value
+    return "unknown (no metadata.version in SKILL.md's frontmatter)"
+
+
+def export_layers(found):
+    os.environ["SCRILLS_LAYERS"] = os.pathsep.join(directory for _, directory in found)
+
+
+def cmd_py(argv):
+    if argv:
+        fail(f"scrills py: unknown argument {argv[0]}\n{USAGE}", 2)
+    if sys.stdin is None or sys.stdin.isatty():
+        fail("scrills py: no code on stdin. Pass it as a heredoc:\n  scrills py <<'PY'\n  ...\n  PY", 2)
+    home, found, foreign = layers()
+    warn_foreign(foreign)
+    warn_shadows(found)
+    python = ensure_runtime(home)
+    export_layers(found)
+    run_id = os.urandom(8).hex()
+    trace, parent, flags = lineage()
+    card, lock_fd = register(home, "py", "py", None, os.getpid(), run_id, trace, parent)
+    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags) + PY_BODY
+    os.execv(python, [python, *child_flags(home), "-c", boot])
+
+
+def cmd_run(argv):
+    if not argv:
+        fail("usage: scrills run <name> [args...]", 2)
+    name = argv[0]
+    home, found, foreign = layers()
+    warn_foreign(foreign)
+    warn_shadows(found)
+    merged, _ = library(found)
+    if name not in merged:
+        available = ", ".join(sorted(merged)) or "none yet"
+        fail(f"scrills run: there's no scrill named {name} (available: {available})", 2)
+    if binds_main(merged[name]["entry"]) is False:
+        fail(f"scrills run: {name} defines no main(), so it only imports. Use it from py: from scrills import {name}", 2)
+    python = ensure_runtime(home)
+    export_layers(found)
+    run_id = os.urandom(8).hex()
+    trace, parent, flags = lineage()
+    card, lock_fd = register(home, "run", name, merged[name]["layer"], os.getpid(), run_id, trace, parent)
+    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags) + RUN_BODY
+    os.execv(python, [python, *child_flags(home), "-c", boot, name, *argv[1:]])
+
+
+def cmd_install(argv):
+    if not argv:
+        fail("usage: scrills install <package> [pip args...]", 2)
+    home, _, _ = layers()
+    python = ensure_runtime(home)
+    os.execv(python, [python, *child_flags(home), "-m", "pip", "install", *argv])
+
+
+def stray_modules(found_layers):
+    strays = []
+    for label, directory in found_layers:
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for filename in names:
+            stem, extension = os.path.splitext(filename)
+            if extension == ".py" and not filename.startswith(("_", ".")) and stem.isidentifier():
+                strays.append((filename, label))
+    return strays
+
+
+def cmd_list():
+    home, found, foreign = layers()
+    warn_foreign(foreign)
+    merged, shadowed = library(found)
+    if not merged:
+        where = " or ".join(directory for _, directory in found) or home
+        print(f"no scrills yet; the library is {where}")
+        return
+    for name in sorted(merged):
+        scrill = merged[name]
+        mark = f"  (runs standalone: scrills run {name})" if runnable(scrill["entry"]) is True else ""
+        print(f"{name}  ({scrill['layer']}){mark}")
+        lines, kind = manifest(scrill["entry"])
+        for line in lines:
+            print(f"  {line}")
+        for notice in notices(name, lines, kind):
+            print(f"  {notice}")
+    for name, layer in shadowed:
+        print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
+    for filename, layer in stray_modules(found):
+        print(f"{filename}  ({layer}, stray module - importable as scrills.{os.path.splitext(filename)[0]}, invisible here; fold it into a folder)")
+
+
+def tilde(path):
+    homedir = os.path.expanduser("~")
+    if path == homedir or path.startswith(homedir + os.sep):
+        return "~" + path[len(homedir):]
+    return path
+
+
+def age(started):
+    try:
+        begin = datetime.datetime.fromisoformat(started)
+        seconds = max(0, int((datetime.datetime.now(begin.tzinfo) - begin).total_seconds()))
+    except (TypeError, ValueError):
+        return "?"
+    for unit, span in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= span:
+            return f"{seconds // span}{unit}"
+    return f"{seconds}s"
+
+
+def clock(started):
+    return started[11:16] if isinstance(started, str) and len(started) >= 16 else "?"
+
+
+def log_records(home):
+    records = []
+    directory = runs_dir(home)
+    for filename in ("log.prev.jsonl", "log.jsonl"):
+        text = read_text(os.path.join(directory, filename))
+        if not text:
+            continue
+        for line in text.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+    return records
+
+
+def within_day(record):
+    try:
+        begin = datetime.datetime.fromisoformat(record.get("started", ""))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.datetime.now(begin.tzinfo) - begin).total_seconds() <= 86400
+
+
+def cmd_ps():
+    home, _, _ = layers()
+    running, died = sweep(home)
+    lines = []
+    if running:
+        lines.append("running:")
+        for card in running:
+            lines.append(
+                f"  {card.get('name', '?')}  pid {card.get('pid', '?')}  {age(card.get('started'))}"
+                f"  {tilde(card.get('cwd', '?'))}  ({card.get('who', '?')})"
+            )
+    else:
+        lines.append("running: nothing")
+    if died:
+        lines.append("died (found now, recorded):")
+        for card in died:
+            lines.append(
+                f"  {card.get('name', '?')}  pid {card.get('pid', '?')}  started {clock(card.get('started'))}"
+                f"  {tilde(card.get('cwd', '?'))}"
+            )
+    day = [record for record in log_records(home) if within_day(record)]
+    if day:
+        errors = [record for record in day if record.get("status") == "error"]
+        counts, named = {}, {}
+        for record in day:
+            status = record.get("status")
+            status = status if isinstance(status, str) and status else "?"
+            counts[status] = counts.get(status, 0) + 1
+            if status == "outcome":
+                name = record.get("outcome")
+                name = name if isinstance(name, str) and name else "?"
+                named[name] = named.get(name, 0) + 1
+        parts = [f"{counts.get('ok', 0)} ok"]
+        if named:
+            breakdown = ", ".join(f"{count} {name}" for name, count in sorted(named.items()))
+            parts.append(f"{counts['outcome']} outcome ({breakdown})")
+        parts.extend(
+            f"{count} {status}" for status, count in sorted(counts.items()) if status not in ("ok", "outcome", "error", "died")
+        )
+        parts.extend((f"{len(errors)} error", f"{counts.get('died', 0)} died"))
+        lines.append(f"last 24h: {len(day)} runs - {', '.join(parts)}")
+        for record in errors[-5:]:
+            detail = ""
+            if record.get("error_type"):
+                detail = f" - {record['error_type']}"
+                if record.get("error_at"):
+                    detail += f" at {tilde(str(record['error_at']))}"
+            lines.append(
+                f"  error: {record.get('name', '?')} exit {record.get('exit', '?')}"
+                f" at {clock(record.get('started'))} in {tilde(record.get('cwd', '?'))}{detail}"
+            )
+    else:
+        lines.append("last 24h: no runs recorded")
+    lines.append(f"log: {log_path(home)}")
+    print("\n".join(lines))
+
+
+def cmd_where():
+    home, found, foreign = layers()
+    project = next((directory for label, directory in found if label == "project"), None)
+    python = venv_python(home)
+    site = site_packages(home)
+    if project:
+        project_line = f"project: {project}"
+    elif foreign:
+        project_line = f"project: none (nearest .scrills at {foreign[0]} is owned by uid {foreign[1]}, not you - ignored)"
+    else:
+        project_line = f"project: none (no .scrills between {os.getcwd()} and /)"
+    lines = [
+        project_line,
+        f"user library: {home}" + ("" if os.path.isdir(home) else "  (not created yet)"),
+        f"python: {python}" + ("" if os.path.exists(python) else "  (created by the first py or run call)"),
+        f"resolver: {site}" if site else "resolver: none yet  (created with the environment)",
+        f"packages: scrills install <package>  (= {python} -m pip install)",
+    ]
+    print("\n".join(lines))
+
+
+def relaunch():
+    python = venv_python(user_home())
+    try:
+        if not os.path.exists(python) or os.path.realpath(python) == os.path.realpath(sys.executable):
+            return
+        os.execv(python, [python, "-I", SCRIPT, *sys.argv[1:]])
+    except OSError:
+        pass
+
+
+def main():
+    relaunch()
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        sys.exit(0 if argv else 2)
+    verb, rest = argv[0], argv[1:]
+    if verb == "--version":
+        print(version())
+    elif verb == "list":
+        cmd_list()
+    elif verb == "py":
+        cmd_py(rest)
+    elif verb == "run":
+        cmd_run(rest)
+    elif verb == "install":
+        cmd_install(rest)
+    elif verb == "ps":
+        cmd_ps()
+    elif verb == "where":
+        cmd_where()
+    else:
+        fail(f"scrills: unknown verb {verb}\n{USAGE}", 2)
+
+
+main()

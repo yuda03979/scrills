@@ -1,0 +1,49 @@
+site_name: scrills
+site_description: Skills are knowledge you read. Scrills are capability you call.
+site_url: https://yuda03979.github.io/scrills/
+repo_url: https://github.com/yuda03979/scrills
+repo_name: yuda03979/scrills
+copyright: Copyright &copy; 2026 Yuda Mandelbaum
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: light mode
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - The manual: manual.md
+  - Examples: examples.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true
+
+not_in_nav: |
+  requirements.txt
