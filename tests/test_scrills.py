@@ -307,6 +307,24 @@ def test_run_syntax_error_is_truthful(home, project):
     assert "doesn't parse" in listing.stdout
 
 
+def test_source_decoding_matches_python(home, project):
+    bom = project / ".scrills" / "bom"
+    bom.mkdir(parents=True)
+    text = '"""\n---\nname: bom\ndescription: opens with a byte order mark\nversion: 0.1.0\n---\n"""\ndef main():\n    print("bom ran")\n    return 0\n'
+    (bom / "__init__.py").write_bytes(text.encode("utf-8-sig"))
+    legacy = project / ".scrills" / "legacy"
+    legacy.mkdir(parents=True)
+    declared = '# -*- coding: latin-1 -*-\n"""\n---\nname: legacy\ndescription: café special\nversion: 0.1.0\n---\n"""\n'
+    (legacy / "__init__.py").write_bytes(declared.encode("latin-1"))
+    listing = scrills(["list"], home, project)
+    assert "doesn't parse" not in listing.stdout
+    assert "runs standalone: scrills run bom" in listing.stdout
+    assert "café special" in listing.stdout
+    ran = scrills(["run", "bom"], home, project)
+    assert ran.returncode == 0
+    assert ran.stdout == "bom ran\n"
+
+
 def test_run_accepts_guarded_and_indirect_main(home, project):
     write_scrill(
         project / ".scrills",
@@ -444,12 +462,26 @@ def test_list_reports_keyword_and_stray_module(home, project):
     listing = scrills(["list"], home, project)
     assert "python keyword" in listing.stdout
     assert "loose.py" in listing.stdout
+    assert "shadows the user scrill loose" in listing.stdout
     probe = scrills(["py"], home, project, stdin="from scrills import loose\nloose.KIND")
     assert probe.returncode == 0
     assert probe.stdout == "'stray'\n"
+    assert "shadow" in probe.stderr
+    assert "loose.py" in probe.stderr
     ran = scrills(["run", "class"], home, project)
     assert ran.returncode == 0
     assert ran.stdout == "kw ran\n"
+    assert "loose.py" in ran.stderr
+
+
+def test_list_shows_strays_alone(tmp_path):
+    project = tmp_path / "proj"
+    (project / ".scrills").mkdir(parents=True)
+    (project / ".scrills" / "orphan.py").write_text("VALUE = 1\n")
+    result = scrills(["list"], tmp_path / "no-home", project)
+    assert result.returncode == 0
+    assert "no scrills yet" in result.stdout
+    assert "orphan.py" in result.stdout
 
 
 def test_run_no_main(home, project):
@@ -877,6 +909,27 @@ def test_killed_run_is_not_kept_running_by_a_shell_child(home, project):
                 pass
 
 
+def test_forked_child_does_not_finalize_the_record(home, project):
+    before = len(log_records(home, "py"))
+    snippet = textwrap.dedent(
+        """
+        import os, sys
+        pid = os.fork()
+        if pid == 0:
+            sys.exit(0)
+        os.waitpid(pid, 0)
+        print("parent done")
+        """
+    )
+    result = scrills(["py"], home, project, stdin=snippet)
+    assert result.returncode == 0
+    assert "parent done" in result.stdout
+    records = log_records(home, "py")
+    assert len(records) == before + 1
+    assert records[-1]["status"] == "ok"
+    assert not cards(home, "py")
+
+
 def test_log_records_imported_scrills(home, project):
     write_scrill(project / ".scrills", "ia", "ia", "VALUE = 1")
     write_scrill(project / ".scrills", "ib", "---\nname: ib\ndescription: d\nversion: 0.9.9\n---", "VALUE = 2")
@@ -1100,6 +1153,34 @@ def test_exits_can_never_write_core_status(home, project):
         record = log_records(home, "liar")[-1]
         assert record["status"] == "outcome"
         assert record["outcome"] == name
+
+
+def test_exit_codes_record_what_the_shell_sees(home, project):
+    write_scrill(
+        project / ".scrills",
+        "wrapper",
+        "wrapper",
+        """
+        import sys
+        EXITS = {1: "wrapped"}
+        def main():
+            sys.exit(int(sys.argv[1]))
+        """,
+    )
+    assert scrills(["run", "wrapper", "256"], home, project).returncode == 0
+    record = log_records(home, "wrapper")[-1]
+    assert record["status"] == "ok"
+    assert record["exit"] == 0
+    assert scrills(["run", "wrapper", "257"], home, project).returncode == 1
+    record = log_records(home, "wrapper")[-1]
+    assert record["status"] == "outcome"
+    assert record["outcome"] == "wrapped"
+    assert record["exit"] == 1
+    result = scrills(["py"], home, project, stdin="import sys\nsys.exit(-1)")
+    assert result.returncode == 255
+    record = log_records(home, "py")[-1]
+    assert record["status"] == "error"
+    assert record["exit"] == 255
 
 
 def test_exits_only_names_what_main_chose(home, project):
@@ -1328,6 +1409,19 @@ def test_registry_failure_is_harmless(home, project):
     assert result.stdout == "fine\n"
 
 
+def test_py_with_stderr_closed_still_runs(home, project):
+    result = subprocess.run(
+        ["/bin/sh", "-c", f'exec 2>&- ; "{sys.executable}" "{CLI}" py'],
+        input="1",
+        env={**base_env(), "SCRILLS_HOME": str(home)},
+        cwd=str(project),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "1\n"
+
+
 def test_references_modules_import(home, project):
     folder = write_scrill(
         project / ".scrills",
@@ -1397,3 +1491,22 @@ def test_list_raises_frontmatter_drift(home, project):
     clean_chunk = result.stdout.split("clean  (project)")[1].split("emails  (project)")[0]
     assert "(no " not in clean_chunk
     assert "differs" not in clean_chunk
+
+
+def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
+    repo = Path(CLI).resolve().parent.parent.parent
+    for label, launch in (("sh", ["sh", "install.sh", "--no-skill"]), ("dot", ["./install.sh", "--no-skill"])):
+        bin_dir = tmp_path / f"bin-{label}"
+        env = {
+            **base_env(),
+            "HOME": str(tmp_path / "fakehome"),
+            "SCRILLS_BIN": str(bin_dir),
+            "SCRILLS_SRC": str(tmp_path / "src"),
+            "SCRILLS_REPO": str(tmp_path / "norepo"),
+        }
+        result = subprocess.run(launch, cwd=str(repo), env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "installing from this clone" in result.stdout
+        link = bin_dir / "scrills"
+        assert link.is_symlink()
+        assert os.path.realpath(link) == os.path.realpath(CLI)

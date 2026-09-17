@@ -4,7 +4,7 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). Nothing to install.
 license: Apache-2.0
 metadata:
-  version: "0.2.7"
+  version: "0.2.8"
 ---
 
 # scrills

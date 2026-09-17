@@ -1,10 +1,10 @@
 #!/bin/sh
 # Installs scrills: links the command onto your PATH, and offers the skill to Claude Code.
 #
-# Two ways in, one script. Run it from a clone and it installs that clone. Pipe it from the
-# internet and it clones first, into ~/.local/share/scrills, then installs that. Either way the
-# command is a symlink into the repo, so `git pull` is the upgrade path and the CLI can still
-# find SKILL.md beside it.
+# Two ways in, one script. Run it from a clone (./install.sh, or sh install.sh) and it installs
+# that clone. Pipe it from the internet and it clones first, into ~/.local/share/scrills, then
+# installs that. Either way the command is a symlink into the repo, so `git pull` is the upgrade
+# path and the CLI can still find SKILL.md beside it.
 #
 # Knobs, all optional: SCRILLS_BIN (default ~/.local/bin), SCRILLS_SRC (default
 # ~/.local/share/scrills, only used when cloning), SCRILLS_REPO (default the github url),
@@ -29,9 +29,9 @@ for arg in "$@"; do
 done
 
 here=
-case $0 in
-    */*) here=$(cd "$(dirname "$0")" && pwd) ;;
-esac
+if [ -f "$0" ]; then
+    here=$(cd "$(dirname "$0")" && pwd)
+fi
 
 if [ -n "$here" ] && [ -f "$here/scrills/scripts/scrills" ]; then
     root=$here

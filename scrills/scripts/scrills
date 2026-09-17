@@ -9,7 +9,8 @@
 # also hosts the generated .venv. A folder whose name starts with '_' is an invisible draft; a
 # folder whose name is not a valid identifier is ignored. A project scrill shadowing a different
 # user scrill is process-wide - other scrills' imports get the project one - so py and run say
-# so in one stderr line.
+# so in one stderr line. A stray <name>.py at a layer root resolves the same way (a scrill
+# folder beats it within its own layer), joins that notice, and list points at it.
 #
 # The venv is the runtime; this CLI is a thin dispatcher. The resolver lives inside the venv
 # (site-packages/_scrills_pth.py + scrills.pth, rewritten atomically whenever this file's copy
@@ -39,7 +40,8 @@
 # <home>/.runs/<pid>.json while it runs, one appended line in <home>/.runs/log.jsonl when it
 # ends. Metadata only - verb, name, a W3C-shaped run id (a valid TRACEPARENT in the environment
 # is joined, and the boot sets TRACEPARENT for everything the run starts, so chained runs share
-# one trace), pid, cwd, who, timing, exit, the scrills the run imported with their versions,
+# one trace), pid, cwd, who, timing, exit (wrapped to 0..255 like the OS wraps it, so the
+# record always equals what the caller observed), the scrills the run imported with their versions,
 # and on an uncaught exception its type and where it broke (for a compile error, where the
 # compiler found it; never a location inside this file's own plumbing) - never code, argv,
 # output, or the exception message. A scrill names the exits its main() chooses in a module
@@ -52,7 +54,8 @@
 # sweep probes the lock, not the pid: lock free = the run died uncleanly, turned into a `died` log
 # line - crash visibility with no supervisor, no recycled-pid ghosts (kill(pid, 0) remains only
 # as the fallback where flock is unsupported). The outcome line is written from an atexit hook,
-# after non-daemon threads joined, so `ok` means actually finished. `who` comes from
+# after non-daemon threads joined, so `ok` means actually finished - and only by the process
+# that booted: a forked child inherits the hook but never finalizes the parent's record. `who` comes from
 # $SCRILLS_WHO when set (harness extensions and cron lines label themselves; the core sniffs no
 # vendor variables), else tty/detached. `ps` shows running, newly-found-dead, and the last 24h;
 # the log rotates once past 1 MiB, under a non-blocking flock so racing finishers never rotate
@@ -128,6 +131,7 @@ LOCK_FD = {lock_fd!r}
 LOG = {log!r}
 PREV = {prev!r}
 STARTED = {started!r}
+BOOT_PID = os.getpid()
 OUTCOME = {{}}
 try:
     os.environ['TRACEPARENT'] = {traceparent!r}
@@ -178,7 +182,7 @@ def _version_of(module):
             return value or None
     return None
 def _write_record():
-    if CARD is None or not OUTCOME:
+    if CARD is None or not OUTCOME or os.getpid() != BOOT_PID:
         return
     try:
         import fcntl
@@ -273,7 +277,7 @@ except SystemExit as stop:
     if stop.code is None:
         status = 0
     elif isinstance(stop.code, int):
-        status = stop.code
+        status = stop.code & 0xFF
     else:
         print(stop.code, file=sys.stderr)
         status = 1
@@ -317,7 +321,7 @@ try:
         if value is None:
             code = 0
         elif isinstance(value, int):
-            code = value
+            code = value & 0xFF
             chosen = True
         else:
             print(value, file=sys.stderr)
@@ -329,7 +333,7 @@ except SystemExit as stop:
     if stop.code is None:
         code = 0
     elif isinstance(stop.code, int):
-        code = stop.code
+        code = stop.code & 0xFF
         chosen = module is not None
     else:
         print(stop.code, file=sys.stderr)
@@ -402,12 +406,13 @@ def warn_shadows(found):
     project, user = layered.get("project"), layered.get("user")
     if not project or not user:
         return
-    user_scan = scan(user)
-    names = sorted(
-        name
-        for name, entry in scan(project).items()
-        if name in user_scan and os.path.realpath(entry) != os.path.realpath(user_scan[name])
-    )
+    user_side = providers(user)
+    names = []
+    for name, entry in sorted(providers(project).items()):
+        theirs = user_side.get(name)
+        if theirs is None or os.path.realpath(entry) == os.path.realpath(theirs):
+            continue
+        names.append(name if os.path.basename(entry) == "__init__.py" else f"{name} (a stray {os.path.basename(entry)})")
     if names:
         print(
             f"scrills: project scrills shadow user ones for this run: {', '.join(names)}"
@@ -431,6 +436,25 @@ def scan(directory):
     return found
 
 
+def stray_scan(directory):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return {}
+    found = {}
+    for filename in names:
+        stem, extension = os.path.splitext(filename)
+        if extension == ".py" and not filename.startswith(("_", ".")) and stem.isidentifier():
+            found[stem] = os.path.join(directory, filename)
+    return found
+
+
+def providers(directory):
+    merged = dict(stray_scan(directory))
+    merged.update(scan(directory))
+    return merged
+
+
 def library(found_layers):
     merged = {}
     shadowed = []
@@ -451,8 +475,16 @@ def read_text(path):
         return None
 
 
+def read_source(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
 def manifest(entry):
-    source = read_text(entry)
+    source = read_source(entry)
     if source is None:
         return ["(unreadable)"], None
     try:
@@ -549,7 +581,7 @@ def may_bind_main(tree):
 
 
 def parsed(entry):
-    source = read_text(entry)
+    source = read_source(entry)
     if source is None:
         return None
     try:
@@ -601,7 +633,7 @@ def who():
         return explicit
     try:
         return "tty" if sys.stderr.isatty() else "detached"
-    except (OSError, ValueError):
+    except (AttributeError, OSError, ValueError):
         return "detached"
 
 
@@ -941,27 +973,23 @@ def cmd_install(argv):
 
 
 def stray_modules(found_layers):
-    strays = []
-    for label, directory in found_layers:
-        try:
-            names = sorted(os.listdir(directory))
-        except OSError:
-            continue
-        for filename in names:
-            stem, extension = os.path.splitext(filename)
-            if extension == ".py" and not filename.startswith(("_", ".")) and stem.isidentifier():
-                strays.append((filename, label))
-    return strays
+    return [
+        (os.path.basename(path), label, stem)
+        for label, directory in found_layers
+        for stem, path in sorted(stray_scan(directory).items())
+    ]
 
 
 def cmd_list():
     home, found, foreign = layers()
     warn_foreign(foreign)
     merged, shadowed = library(found)
+    strays = stray_modules(found)
     if not merged:
         where = " or ".join(directory for _, directory in found) or home
         print(f"no scrills yet; the library is {where}")
-        return
+        if not strays:
+            return
     for name in sorted(merged):
         scrill = merged[name]
         mark = f"  (runs standalone: scrills run {name})" if runnable(scrill["entry"]) is True else ""
@@ -973,8 +1001,12 @@ def cmd_list():
             print(f"  {notice}")
     for name, layer in shadowed:
         print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
-    for filename, layer in stray_modules(found):
-        print(f"{filename}  ({layer}, stray module - importable as scrills.{os.path.splitext(filename)[0]}, invisible here; fold it into a folder)")
+    for filename, layer, stem in strays:
+        beaten = merged.get(stem)
+        if layer == "project" and beaten is not None and beaten["layer"] == "user":
+            print(f"{filename}  (project, stray module - shadows the user scrill {stem}: imports get this file; fold it into a folder)")
+        else:
+            print(f"{filename}  ({layer}, stray module - importable as scrills.{stem}, invisible here; fold it into a folder)")
 
 
 def tilde(path):
