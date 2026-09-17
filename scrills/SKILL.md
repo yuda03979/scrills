@@ -59,6 +59,7 @@ When logic proves useful beyond the moment, save it as a scrill: a folder in the
     __init__.py      the scrill: manual in the docstring, code below it
     helper.py        optional siblings
     references/      optional extra material: docs read on demand, deeper modules
+    templates.json   anything else it needs - only __init__.py is required
 ```
 
 The module docstring opens with frontmatter exactly like a SKILL.md:
@@ -79,6 +80,7 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 - The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`, the one deliberate difference from the skills format. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
 - The description says *when* to use it; the rest of the docstring and each function's docstring say *how*. Longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
+- **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
 - State that survives between runs goes under `~/.scrills/.state/<name>/` (`$SCRILLS_HOME`-aware) — the scrill's own name, its own folder, never another's.
 - **A sync function never calls `asyncio.run()`.** A `py` snippet that awaits anywhere runs inside an event loop, where `asyncio.run()` raises. For concurrency inside sync code use threads; offer an `async def` twin for callers that await.
 - A name starting with `_` is a draft, invisible until renamed.

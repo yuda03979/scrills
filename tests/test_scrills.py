@@ -1352,6 +1352,39 @@ def test_references_modules_import(home, project):
     assert "42 42" in result.stdout
 
 
+def test_a_scrill_may_carry_any_files(home, project):
+    folder = write_scrill(
+        project / ".scrills",
+        "carry",
+        "---\nname: carry\ndescription: t\nversion: 0.1.0\n---",
+        """
+        import json
+        import os
+
+        HERE = os.path.dirname(os.path.abspath(__file__))
+
+        def table():
+            with open(os.path.join(HERE, "data.json")) as handle:
+                return json.load(handle)
+
+        def note():
+            with open(os.path.join(HERE, "assets", "deep", "notes.md")) as handle:
+                return handle.read().strip()
+        """,
+    )
+    (folder / "data.json").write_text('{"rows": 3}')
+    (folder / "README.txt").write_text("not python\n")
+    (folder / "assets" / "deep").mkdir(parents=True)
+    (folder / "assets" / "deep" / "notes.md").write_text("# notes\n")
+    listed = scrills(["list"], home, project)
+    assert listed.returncode == 0
+    assert "carry  (project)" in listed.stdout
+    assert "(doesn't parse" not in listed.stdout
+    result = scrills(["py"], home, project, stdin="from scrills import carry\nprint(carry.table(), carry.note())\n")
+    assert result.returncode == 0, result.stderr
+    assert "{'rows': 3} # notes" in result.stdout
+
+
 def test_list_raises_frontmatter_drift(home, project):
     write_scrill(project / ".scrills", "emails", "---\nname: emailz\ndescription: d\nversion: 0.1.0\n---")
     write_scrill(project / ".scrills", "bare", "---\nname: bare\n---")

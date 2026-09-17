@@ -124,6 +124,7 @@ The anatomy, in order of importance:
 
 - **The docstring is the manual.** Frontmatter (`name`, `description`, `version`) exactly like a SKILL.md, then prose. The description says *when* to use it; the docstrings say *how*. `scrills list` shows the frontmatter without executing anything.
 - Optional siblings (`helper.py`, imported as `from .helper import x`) and an optional `references/` folder for longer material — docs read on demand, plus deeper modules importable as `from .references import x`.
+- **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.
 - One scrill imports another with `from scrills import <name>`.
 - A folder name starting with `_` is an invisible draft.
 

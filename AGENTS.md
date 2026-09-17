@@ -53,7 +53,7 @@ skills spec — only `scrills/SKILL.md` follows it, because only that file is a 
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **110 passed, 3 skipped** — the three skips are example tests that need `pypdf` in the
+Expect **111 passed, 3 skipped** — the three skips are example tests that need `pypdf` in the
 session venv and are covered by live runs instead. The suite drives the real CLI as a subprocess
 against a session-scoped scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and
 `TRACEPARENT` so a developer's environment can't steer it. Example tests run offline behind PATH
