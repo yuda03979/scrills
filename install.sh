@@ -55,12 +55,14 @@ mkdir -p "$BIN"
 ln -sfn "$root/scrills/scripts/scrills" "$BIN/scrills"
 echo "linked   $BIN/scrills -> $root/scrills/scripts/scrills"
 
+linked_skill=
 if [ "$want_skill" = yes ] && [ -d "$SKILLS" ]; then
     if [ -e "$SKILLS/scrills" ] && [ ! -L "$SKILLS/scrills" ]; then
         echo "skipped  $SKILLS/scrills exists and is not a symlink - left untouched"
     else
         ln -sfn "$root/scrills" "$SKILLS/scrills"
-        echo "linked   $SKILLS/scrills -> $root/scrills"
+        linked_skill=$SKILLS/scrills
+        echo "linked   $linked_skill -> $root/scrills"
     fi
 fi
 
@@ -74,4 +76,5 @@ echo
 echo
 echo "start here:  scrills list"
 echo "upgrade:     git -C $root pull"
-echo "uninstall:   rm -f $BIN/scrills $SKILLS/scrills  (and rm -rf ~/.scrills to drop the library)"
+echo "uninstall:   rm -f $BIN/scrills $linked_skill"
+echo "             your library at ~/.scrills is yours - this never touches it"
