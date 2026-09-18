@@ -911,3 +911,53 @@ def test_harness_config_usage(home, tmp_path):
     record = harness_records(home)[-1]
     assert record["status"] == "outcome"
     assert record["outcome"] == "usage"
+
+
+BUS_HOOK = {"hooks": [{"type": "command", "command": "BUS_HARNESS=0.1.1 /usr/bin/true", "timeout": 10}]}
+
+
+def session_start(fake):
+    return settings_of(fake).get("hooks", {}).get("SessionStart", [])
+
+
+def test_harness_config_hook_merges_beside_foreign_hooks(home, tmp_path):
+    seeded = {"hooks": {"SessionStart": [BUS_HOOK], "Stop": [{"hooks": []}]}, "model": "opus"}
+    fake, env = claude_home(tmp_path, json.dumps(seeded))
+    result = scrills(["run", "harness_config", "apply", "--hook"], home, extra_env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    entries = session_start(fake)
+    assert entries[0] == BUS_HOOK
+    assert len(entries) == 2
+    command = entries[1]["hooks"][0]["command"]
+    assert command.startswith("SCRILLS_HOOK=")
+    assert " list" in command
+    assert settings_of(fake)["hooks"]["Stop"] == [{"hooks": []}]
+    assert settings_of(fake)["model"] == "opus"
+    before = (fake / ".claude" / "settings.json").read_bytes()
+    again = scrills(["run", "harness_config", "apply", "--hook"], home, extra_env=env)
+    assert again.returncode == 0
+    assert "nothing to change" in again.stdout
+    assert (fake / ".claude" / "settings.json").read_bytes() == before
+
+
+def test_harness_config_plain_apply_adds_no_hook_and_status_reports(home, tmp_path):
+    fake, env = claude_home(tmp_path)
+    assert scrills(["run", "harness_config", "apply"], home, extra_env=env).returncode == 0
+    assert session_start(fake) == []
+    status = scrills(["run", "harness_config", "status"], home, extra_env=env)
+    assert status.returncode == 0
+    assert "hook: absent" in status.stdout
+    assert scrills(["run", "harness_config", "apply", "--hook"], home, extra_env=env).returncode == 0
+    status = scrills(["run", "harness_config", "status"], home, extra_env=env)
+    assert status.returncode == 0
+    assert "hook: present" in status.stdout
+
+
+def test_harness_config_undo_removes_only_our_hook(home, tmp_path):
+    seeded = {"hooks": {"SessionStart": [BUS_HOOK]}}
+    fake, env = claude_home(tmp_path, json.dumps(seeded))
+    assert scrills(["run", "harness_config", "apply", "--hook"], home, extra_env=env).returncode == 0
+    assert len(session_start(fake)) == 2
+    result = scrills(["run", "harness_config", "undo"], home, extra_env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert session_start(fake) == [BUS_HOOK]

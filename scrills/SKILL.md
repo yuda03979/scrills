@@ -1,10 +1,10 @@
 ---
 name: scrills
-description: Skills you import instead of read. A library of Python capability, layered per project and per user, driven from bash. Use it before writing logic a scrill may already hold, for computation beyond a one-liner, and for finished work with clear inputs.
+description: Skills you import instead of read. A library of Python capability, layered per project and per user, driven from bash. Before reaching for any other tool or writing any script, check `scrills list` - a scrill may already cover the task; then use it for the work, for computation beyond a one-liner, and for finished work with clear inputs.
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). Nothing to install.
 license: Apache-2.0
 metadata:
-  version: "0.2.9"
+  version: "0.2.10"
 ---
 
 # scrills

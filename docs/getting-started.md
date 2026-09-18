@@ -178,7 +178,7 @@ Scrills are built for coding agents: the library is how capability survives the 
 - Claude Code: `ln -s "$PWD/scrills" ~/.claude/skills/scrills`
 - Anything else: paste `scrills/SKILL.md` into the session, or reference its path.
 
-The `harness_config` example automates the Claude Code half and adds the permission rule that lets sessions run `scrills` unprompted: `cd examples && scrills run harness_config apply`. It lives in the examples layer, so copy or symlink it into `~/.scrills` to have it anywhere; `status` shows what's wired, `undo` removes exactly what apply added.
+The `harness_config` example automates the Claude Code half and adds the permission rule that lets sessions run `scrills` unprompted: `cd examples && scrills run harness_config apply`. Add `--hook` and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. It lives in the examples layer, so copy or symlink it into `~/.scrills` to have it anywhere; `status` shows what's wired, `undo` removes exactly what apply added.
 
 A taught agent checks `scrills list` before writing logic, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
 
