@@ -4,7 +4,7 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). Nothing to install.
 license: Apache-2.0
 metadata:
-  version: "0.2.8"
+  version: "0.2.9"
 ---
 
 # scrills
@@ -20,7 +20,7 @@ Two layers, merged, project wins on a name collision:
 - **project**: the nearest `.scrills/` directory walking up from where you are — reviewed and committed with the project. One it doesn't take: a `.scrills` owned by another user is ignored, and `list`, `py`, `run` and `where` say so.
 - **user**: `~/.scrills` (or `$SCRILLS_HOME`) — capability that travels across projects.
 
-A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed. `scrills where` shows both paths, the python, the resolver, and how to install a package.
+A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed — unless the two sides are the same file through a symlink (an installed mirror), which replaces nothing and stays silent. Either way `list` shows the pair: `<name>  (user, shadowed by project)`. `scrills where` shows both paths, the python, the resolver, and how to install a package.
 
 ## Using a scrill
 
@@ -39,7 +39,7 @@ The description says when to use a scrill; `help()` says how. But `help()` rende
 
 Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
-A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs. Being a program, it also slots straight into cron or launchd — one-shot checks, scheduled work.
+A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs. Being a program, it also slots straight into cron or launchd — one-shot checks, scheduled work. Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry.
 
 Input reaches a scrill four ways: function arguments when imported — the main way; argv and stdin when run as a program (`echo data | scrills run it a b`); environment variables inherited from the caller (secrets travel this way, read at call time); and files, relative to your working directory. The catch: `scrills py`'s stdin already carries the code, so there is none left for data. Pass big data as a file path, never pasted into the snippet; `some-command | scrills py` feeds that output to the compiler — write it to a file first, run the command from inside the Python, or use `scrills run`, which does take stdin.
 

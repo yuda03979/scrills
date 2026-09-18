@@ -40,8 +40,10 @@
 # <home>/.runs/<pid>.json while it runs, one appended line in <home>/.runs/log.jsonl when it
 # ends. Metadata only - verb, name, a W3C-shaped run id (a valid TRACEPARENT in the environment
 # is joined, and the boot sets TRACEPARENT for everything the run starts, so chained runs share
-# one trace), pid, cwd, who, timing, exit (wrapped to 0..255 like the OS wraps it, so the
-# record always equals what the caller observed), the scrills the run imported with their versions,
+# one trace; SCRILLS_CLI is set to this file's own path, so a run can spawn nested scrills
+# children without relying on PATH - cron and launchd often have none), pid, cwd, who, timing,
+# exit (wrapped to 0..255 like the OS wraps it, so the record always equals what the caller
+# observed), the scrills the run imported with their versions,
 # and on an uncaught exception its type and where it broke (for a compile error, where the
 # compiler found it; never a location inside this file's own plumbing) - never code, argv,
 # output, or the exception message. A scrill names the exits its main() chooses in a module
@@ -77,6 +79,7 @@ import sys
 import time
 
 SCRIPT = os.path.realpath(__file__)
+os.environ["SCRILLS_CLI"] = SCRIPT
 SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
 USAGE = """usage: scrills <verb>
   list               the library: names, frontmatter, what runs standalone

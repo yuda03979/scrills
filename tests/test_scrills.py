@@ -980,6 +980,35 @@ def test_traceparent_inherited_and_propagated(home, project):
         assert "parent" not in record
 
 
+def test_scrills_cli_exported_to_runs(home, project):
+    result = scrills(["py"], home, project, stdin="import os\nprint(os.environ['SCRILLS_CLI'])")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == os.path.realpath(CLI)
+    write_scrill(
+        project / ".scrills",
+        "reenter",
+        "---\nname: reenter\ndescription: d\nversion: 0.1.0\n---",
+        """
+        import os
+        import re
+        import subprocess
+
+        def main():
+            cli = os.environ["SCRILLS_CLI"]
+            print(cli)
+            bare = {**os.environ, "PATH": "/usr/bin:/bin"}
+            probe = subprocess.run([cli, "--version"], capture_output=True, text=True, env=bare)
+            print(probe.stdout.strip())
+            if not re.fullmatch(r"\\d+\\.\\d+\\.\\d+", probe.stdout.strip()):
+                return 1
+            return probe.returncode
+        """,
+    )
+    result = scrills(["run", "reenter"], home, project)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[0] == os.path.realpath(CLI)
+
+
 def test_error_type_and_location(home, project):
     write_scrill(
         project / ".scrills",
