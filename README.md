@@ -8,8 +8,8 @@ parsing, checking and fetching logic in every session, you import it:
 
 ```bash
 scrills py <<'PY'
-from scrills import media
-print(media.text("paper.pdf", pages="1-3"))
+from scrills import emails
+print(emails.fetch("unread from:support"))
 PY
 ```
 
@@ -50,23 +50,23 @@ cd examples && scrills list
 ```
 
 `list` is the front door: every scrill in your library, the frontmatter of its manual, and which
-ones run standalone. The repo ships four — `subagent`, `media`, `nudge` and `audit` — as a live
-project layer you can read and run.
+ones run standalone. The repo ships one — `harness_config`, harness wiring for Claude Code — as a
+live project layer you can read and run; your own scrills are what fill the library.
 
-Then use one. As a library, from a one-shot Python snippet:
+A scrill is used two ways. As a library, from a one-shot Python snippet:
 
 ```bash
 scrills py <<'PY'
-from scrills import media
-help(media)
+from scrills import emails
+help(emails)
 PY
 ```
 
-Or as a program, because it defines `main()` — argv, stdin, stdout and the exit code pass
+Or as a program, when it defines `main()` — argv, stdin, stdout and the exit code pass
 straight through, which is also what makes a scrill a one-line cron job:
 
 ```bash
-echo "summarize today's errors into errors.md" | scrills run subagent
+echo "unread from:support" | scrills run emails
 ```
 
 ## The format
@@ -117,7 +117,7 @@ between people.
 
 - [Getting started](https://github.com/yuda03979/scrills/blob/main/docs/getting-started.md) — install, first use, first scrill, layers, packages
 - [The manual](https://github.com/yuda03979/scrills/blob/main/scrills/SKILL.md) — what an agent reads; also the full surface
-- [Examples](https://github.com/yuda03979/scrills/blob/main/examples/README.md) — four working scrills that ship with the repo
+- [Examples](https://github.com/yuda03979/scrills/blob/main/examples/README.md) — the example layer that ships with the repo: harness wiring for Claude Code
 
 Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 
@@ -125,8 +125,7 @@ Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 
 A scrill is persistent, importable code — treat the library like code. Project scrills go through
 the project's review; keep an eye on `~/.scrills` the same way. Read a scrill's `__init__.py`
-before first use: it's about a screen of Python, and that read is the review. The `audit` example
-adds a second pair of eyes.
+before first use: it's about a screen of Python, and that read is the review.
 
 Secrets are read from the environment inside a function, at call time. Never hardcode one in a
 scrill, never print one.

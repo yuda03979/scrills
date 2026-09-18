@@ -8,7 +8,7 @@ This file is for a coding agent changing this repository. If you want to *use* s
 ```
 scrills/scripts/scrills   the entire implementation, one file
 scrills/SKILL.md          the manual agents read; also where the version lives
-examples/.scrills/        four working scrills, a live project layer
+examples/.scrills/        the examples project layer (harness wiring today)
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
 install.sh                two symlinks, nothing else
@@ -53,12 +53,10 @@ skills spec — only `scrills/SKILL.md` follows it, because only that file is a 
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **111 passed, 3 skipped** — the three skips are example tests that need `pypdf` in the
-session venv and are covered by live runs instead. The suite drives the real CLI as a subprocess
-against a session-scoped scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and
-`TRACEPARENT` so a developer's environment can't steer it. Example tests run offline behind PATH
-stubs for `claude`, `say`, `ioreg`, `terminal-notifier` and `osascript` — **never let a test spend
-money or make noise.**
+Expect **94 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
+environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
+spend money or make noise.**
 
 New behaviour gets a test that was seen failing first.
 

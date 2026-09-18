@@ -6,8 +6,8 @@ A scrill is a Python module whose docstring is its manual — the documentation 
 
 ```bash
 scrills py <<'PY'
-from scrills import media
-print(media.text("paper.pdf", pages="1-3"))
+from scrills import emails
+print(emails.fetch("unread from:support"))
 PY
 ```
 
@@ -42,30 +42,14 @@ That's the whole install. The first `py` or `run` creates a shared environment a
 
 ## Kick the tires
 
-The repo ships a live example library:
+The repo ships a live example layer:
 
 ```bash
 cd examples
 scrills list
 ```
 
-`list` is the front door — every scrill, its manual's frontmatter, and which ones run standalone. Try one both ways a scrill can be used.
-
-As a library, from a one-shot Python snippet:
-
-```bash
-scrills py <<'PY'
-from scrills import subagent
-help(subagent)
-PY
-```
-
-As a program — on a Mac this one gets your attention once a minute until you stop it: a notification while you're at the computer, spoken aloud when you've stepped away.
-
-```bash
-scrills run nudge "scrills works" 1
-scrills run nudge stop
-```
+`list` is the front door — every scrill, its manual's frontmatter, and which ones run standalone. What ships today is `harness_config`, harness wiring for Claude Code (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
 
 `scrills py` behaves like a disposable REPL: stdout passes through, the trailing expression echoes (truncated past 8,192 characters — print to a file for the full thing), top level may `await`, and nothing persists between calls — anything worth keeping goes in a file. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
@@ -144,20 +128,14 @@ scrills ps
 ```
 ```
 running:
-  subagent  pid 4242  12m  ~/projects/acme  (cron:nightly)
+  report  pid 4242  12m  ~/projects/acme  (cron:nightly)
 last 24h: 61 runs - 60 ok, 1 error, 0 died
 log: ~/.scrills/.runs/log.jsonl
 ```
 
 Failures say why: an uncaught exception records its type and where it broke (never its message), and a scrill can name the exit codes its `main()` chooses — `EXITS = {1: "no answer"}` beside it — so a meaningful non-zero exit is recorded as a named outcome, not as an `error`.
 
-A run that never finished — killed, crashed, power loss — surfaces as `died` the first time anything looks. That makes unattended scrills honest: schedule a one-shot scrill from cron or launchd, and `ps` tells you whether it's actually running. A cron line like
-
-```
-echo "read app.log, summarize new errors into errors.md" | scrills run subagent --tools "Read,Glob,Write" --allowed-tools "Read,Glob,Write"
-```
-
-is the whole "wake an agent on schedule" pattern — the task rides stdin so it never sits in the process list, and the subagent can only do what those flags explicitly grant (by default nothing is approved).
+A run that never finished — killed, crashed, power loss — surfaces as `died` the first time anything looks. That makes unattended scrills honest: schedule a one-shot scrill from cron or launchd — `echo app.log | scrills run report` — and `ps` tells you whether it actually ran, and how it ended.
 
 Attribution is one optional convention: export `SCRILLS_WHO=<something>:<something>` (a cron line, a harness) and runs carry the label.
 
@@ -186,5 +164,5 @@ A taught agent checks `scrills list` before writing logic, uses what exists, and
 
 - **IDEs**: the dot in `.scrills` keeps default toolchains out (Pyright project analysis, mypy, pytest). One exception: ruff checks it — add `extend-exclude = [".scrills"]` and `force-exclude = true` to the project's ruff config.
 - **Secrets**: read them from the environment inside a function, at call time. Never hardcode one in a scrill, never print one — heredoc code passes through your terminal history and your agent's transcript.
-- **Review**: a scrill is persistent, importable code. Treat the library like code — project scrills go through the project's review; keep an eye on `~/.scrills` the same way. The `audit` example adds a second pair of eyes: `scrills run audit <name> && scrills run <name>` runs a scrill only after a sandboxed Claude review of its folder came back clean (cached until the code changes). The review doesn't follow imports — the verdict lists the scrills it uses with their own verdicts, and `scrills run audit --all` covers the whole library.
+- **Review**: a scrill is persistent, importable code. Treat the library like code — project scrills go through the project's review; keep an eye on `~/.scrills` the same way. Read a scrill's `__init__.py` before first use: it's about a screen of Python, and that read is the review.
 - **Uninstall**: `rm ~/.local/bin/scrills`, `rm ~/.claude/skills/scrills` if you linked it, delete `~/.scrills` for the library, and delete the clone (`~/.local/share/scrills`, if the one-liner made it). That's everything.
