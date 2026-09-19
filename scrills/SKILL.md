@@ -86,6 +86,7 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 ```
 
 - The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`. That and the top-level `version` (the skills spec nests it under `metadata`) are the two deliberate differences from the skills format. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
+- Optional `compatibility:` — one free-text line for what the scrill needs around it (a harness, a platform, a binary on PATH); the skills spec's own key, parsed like any frontmatter line. The description still carries the short form — it's all the listing shows.
 - The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). The rest of the docstring and each function's docstring say *how*; longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
