@@ -29,11 +29,13 @@ Or in one line, which clones into `~/.local/share/scrills` and links from there:
 curl -fsSL https://raw.githubusercontent.com/yuda03979/scrills/main/install.sh | sh
 ```
 
-`install.sh` makes two symlinks and stops: `scrills` on your PATH and, if Claude Code is installed, the manual at `~/.claude/skills/scrills`. Read it before you run it — it's short, and reading before running is the habit this whole thing is built around. By hand it's the same two lines:
+`install.sh` makes symlinks and stops: `scrills` on your PATH, plus the manual for detected Claude Code and Pi installs. Read it before you run it — it's short, and reading before running is the habit this whole thing is built around. By hand:
 
 ```bash
 ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
-ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional, see "Teach your agent"
+ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
+mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
+ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
 
 (`~/.local/bin` should be on your PATH; any directory on it works — `SCRILLS_BIN=/elsewhere ./install.sh`. Symlink, don't copy the file out: the command reads its version and manual from the `scrills/` folder next to it, and the symlink makes `git pull` your upgrade path.)
@@ -49,7 +51,7 @@ cd examples
 scrills list
 ```
 
-`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. What ships today is `harness_config`, harness wiring for Claude Code (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
+`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. What ships today is `harness_config`, harness wiring for Claude Code and Pi (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
 
 `scrills py` behaves like a disposable REPL: stdout passes through, the trailing expression echoes (truncated past 8,192 characters — print to a file for the full thing), top level may `await`, and nothing persists between calls — anything worth keeping goes in a file. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
@@ -151,12 +153,21 @@ pip behind it — arguments pass through (`-U`, `==` pins, `-r`), and `scrills w
 
 ## Teach your agent
 
-Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did the Claude Code half if `~/.claude/skills/` existed; otherwise, from the clone root (`cd ..` first if you're still in `examples/`):
+Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise, from the clone root (`cd ..` first if you're still in `examples/`):
 
 - Claude Code: `ln -s "$PWD/scrills" ~/.claude/skills/scrills`
+- Pi: `mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills" && ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"`
 - Anything else: paste `scrills/SKILL.md` into the session, or reference its path.
 
-The `harness_config` example automates the Claude Code half and adds the permission rule that lets sessions run `scrills` unprompted: `cd examples && scrills run harness_config apply`. Add `--hook` and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. It lives in the examples layer, so copy it into `~/.scrills` to have it anywhere; `status` shows what's wired, `undo` removes exactly what apply added.
+The `harness_config` example automates the wiring from inside scrills itself:
+
+```bash
+cd examples
+scrills run harness_config apply       # Claude Code (the default)
+scrills run harness_config apply pi    # Pi
+```
+
+For Claude Code, apply links the skill and adds the Bash permission rule that lets sessions run `scrills` unprompted. Add `--hook` to the Claude Code command and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. For Pi, apply only links the skill under `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`): Pi already provides bash, and no settings or extension are needed. Run Pi's `/reload` after changing resources in an existing session. The example lives in the project layer, so copy it into `~/.scrills` to have it anywhere; `status` shows what's wired, and `undo` removes exactly what apply added.
 
 A taught agent checks `scrills list` before writing logic, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
 
@@ -165,4 +176,4 @@ A taught agent checks `scrills list` before writing logic, uses what exists, and
 - **IDEs**: the dot in `.scrills` keeps default toolchains out (Pyright project analysis, mypy, pytest). One exception: ruff checks it — add `extend-exclude = [".scrills"]` and `force-exclude = true` to the project's ruff config.
 - **Secrets**: read them from the environment inside a function, at call time. Never hardcode one in a scrill, never print one — heredoc code passes through your terminal history and your agent's transcript.
 - **Review**: a scrill is persistent, importable code. Treat the library like code — project scrills go through the project's review; keep an eye on `~/.scrills` the same way. Read a scrill's `__init__.py` before first use: it's about a screen of Python, and that read is the review.
-- **Uninstall**: `rm ~/.local/bin/scrills`, `rm ~/.claude/skills/scrills` if you linked it, delete `~/.scrills` for the library, and delete the clone (`~/.local/share/scrills`, if the one-liner made it). That's everything.
+- **Uninstall**: remove `~/.local/bin/scrills` and any skill links you made (`~/.claude/skills/scrills`, `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills`), delete `~/.scrills` for the library, and delete the clone (`~/.local/share/scrills`, if the one-liner made it). That's everything.

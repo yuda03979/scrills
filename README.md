@@ -33,14 +33,16 @@ Or, in one line — it clones into `~/.local/share/scrills` and links the comman
 curl -fsSL https://raw.githubusercontent.com/yuda03979/scrills/main/install.sh | sh
 ```
 
-`install.sh` is twenty lines of shell you can read first, which is the habit scrills wants
-anyway. It links `scrills` onto your PATH and, if Claude Code is installed, links the manual into
-`~/.claude/skills/`. Two symlinks, nothing else — `git pull` is the upgrade path, and
-`rm` is the uninstall. Doing it by hand instead:
+`install.sh` is a short shell script you can read first, which is the habit scrills wants
+anyway. It links `scrills` onto your PATH and offers the manual to detected Claude Code and Pi
+installs. Symlinks only — `git pull` is the upgrade path, and `rm` is the uninstall. Doing it by
+hand instead:
 
 ```bash
 ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
-ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional
+ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
+mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
+ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
 
 ## A taste
@@ -50,8 +52,8 @@ cd examples && scrills list
 ```
 
 `list` is the front door: the library the way a harness lists skills, one `- name: description`
-line per scrill. The repo ships one — `harness_config`, harness wiring for Claude Code — as a
-live project layer you can read and run; your own scrills are what fill the library.
+line per scrill. The repo ships one — `harness_config`, harness wiring for Claude Code and Pi —
+as a live project layer you can read and run; your own scrills are what fill the library.
 
 A scrill is used two ways. As a library, from a one-shot Python snippet:
 
@@ -117,7 +119,7 @@ between people.
 
 - [Getting started](https://github.com/yuda03979/scrills/blob/main/docs/getting-started.md) — install, first use, first scrill, layers, packages
 - [The manual](https://github.com/yuda03979/scrills/blob/main/scrills/SKILL.md) — what an agent reads; also the full surface
-- [Examples](https://github.com/yuda03979/scrills/blob/main/examples/README.md) — the example layer that ships with the repo: harness wiring for Claude Code
+- [Examples](https://github.com/yuda03979/scrills/blob/main/examples/README.md) — the example layer that ships with the repo: harness wiring for Claude Code and Pi
 
 Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 

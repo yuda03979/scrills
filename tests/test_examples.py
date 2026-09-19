@@ -1,6 +1,6 @@
 # Drives the shipped examples/.scrills layer through the real CLI. Offline: harness_config runs
-# against a scratch HOME with a fake ~/.claude, so no real settings are ever touched - never let
-# a test spend money or make noise.
+# against a scratch HOME with fake Claude Code and Pi config roots, so no real settings are ever
+# touched - never let a test spend money or make noise.
 # Run: uv run --with pytest==8.4.2 python -m pytest tests/ -q
 import json
 import os
@@ -29,7 +29,7 @@ def scrills(args, home, stdin=None, extra_env=None, cwd=EXAMPLES):
 def test_list_shows_the_example_layer(home):
     result = scrills(["list"], home)
     assert result.returncode == 0
-    assert "- harness_config: Use to point a coding harness at scrills." in result.stdout
+    assert "- harness_config: Use to point Claude Code or Pi at scrills." in result.stdout
     assert "scrills run harness_config" in result.stdout
     assert "runs standalone" not in result.stdout
     assert "(no " not in result.stdout
@@ -46,6 +46,14 @@ def claude_home(tmp_path, settings=None):
 
 def settings_of(fake):
     return json.loads((fake / ".claude" / "settings.json").read_text())
+
+
+def pi_home(tmp_path, custom=True):
+    fake = tmp_path / "fakehome"
+    agent = fake / "custom-pi-agent" if custom else fake / ".pi" / "agent"
+    (agent / "skills").mkdir(parents=True)
+    configured = str(agent) if custom else ""
+    return fake, agent, {"HOME": str(fake), "PI_CODING_AGENT_DIR": configured}
 
 
 def harness_records(home):
@@ -137,6 +145,53 @@ def test_harness_config_usage(home, tmp_path):
     record = harness_records(home)[-1]
     assert record["status"] == "outcome"
     assert record["outcome"] == "usage"
+
+
+def test_harness_config_pi_apply_status_and_undo(home, tmp_path):
+    _, agent, env = pi_home(tmp_path)
+    settings = agent / "settings.json"
+    settings.write_text('{"theme": "dark"}\n')
+    before = settings.read_bytes()
+
+    missing = scrills(["run", "harness_config", "status", "pi"], home, extra_env=env)
+    assert missing.returncode == 1
+    assert "harness: pi" in missing.stdout
+    assert "skill_link: missing" in missing.stdout
+
+    result = scrills(["run", "harness_config", "apply", "pi"], home, extra_env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    link = agent / "skills" / "scrills"
+    assert link.is_symlink()
+    assert os.path.realpath(link) == os.path.realpath(SKILL_DIR)
+    assert settings.read_bytes() == before
+
+    again = scrills(["run", "harness_config", "apply", "pi"], home, extra_env=env)
+    assert again.returncode == 0
+    assert "nothing to change" in again.stdout
+    status = scrills(["run", "harness_config", "status", "pi"], home, extra_env=env)
+    assert status.returncode == 0
+    assert "skill_link: ok" in status.stdout
+
+    undone = scrills(["run", "harness_config", "undo", "pi"], home, extra_env=env)
+    assert undone.returncode == 0
+    assert not link.exists()
+    assert settings.read_bytes() == before
+
+
+def test_harness_config_pi_never_touches_a_real_folder_or_accepts_hook(home, tmp_path):
+    _, agent, env = pi_home(tmp_path, custom=False)
+    occupied = agent / "skills" / "scrills"
+    occupied.mkdir()
+    (occupied / "keep.txt").write_text("mine")
+
+    result = scrills(["run", "harness_config", "apply", "pi"], home, extra_env=env)
+    assert result.returncode == 1
+    assert "not a symlink" in result.stdout
+    assert (occupied / "keep.txt").read_text() == "mine"
+
+    hook = scrills(["run", "harness_config", "apply", "--hook", "pi"], home, extra_env=env)
+    assert hook.returncode == 2
+    assert "usage: scrills run harness_config" in hook.stderr
 
 
 BUS_HOOK = {"hooks": [{"type": "command", "command": "BUS_HARNESS=0.1.1 /usr/bin/true", "timeout": 10}]}

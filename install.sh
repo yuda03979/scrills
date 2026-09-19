@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs scrills: links the command onto your PATH, and offers the skill to Claude Code.
+# Installs scrills: links the command onto your PATH, and offers the skill to Claude Code and Pi.
 #
 # Two ways in, one script. Run it from a clone (./install.sh, or sh install.sh) and it installs
 # that clone. Pipe it from the internet and it clones first, into ~/.local/share/scrills, then
@@ -8,7 +8,7 @@
 #
 # Knobs, all optional: SCRILLS_BIN (default ~/.local/bin), SCRILLS_SRC (default
 # ~/.local/share/scrills, only used when cloning), SCRILLS_REPO (default the github url),
-# --no-skill (skip the Claude Code link).
+# PI_CODING_AGENT_DIR (Pi's config root), --no-skill (skip the harness skill links).
 #
 # Nothing here touches ~/.scrills - that is your scrill library, and it stays yours.
 
@@ -17,7 +17,9 @@ set -eu
 REPO=${SCRILLS_REPO:-https://github.com/yuda03979/scrills.git}
 SRC=${SCRILLS_SRC:-$HOME/.local/share/scrills}
 BIN=${SCRILLS_BIN:-$HOME/.local/bin}
-SKILLS=$HOME/.claude/skills
+CLAUDE_SKILLS=$HOME/.claude/skills
+PI_AGENT=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
+PI_SKILLS=$PI_AGENT/skills
 want_skill=yes
 
 for arg in "$@"; do
@@ -55,14 +57,25 @@ mkdir -p "$BIN"
 ln -sfn "$root/scrills/scripts/scrills" "$BIN/scrills"
 echo "linked   $BIN/scrills -> $root/scrills/scripts/scrills"
 
-linked_skill=
-if [ "$want_skill" = yes ] && [ -d "$SKILLS" ]; then
-    if [ -e "$SKILLS/scrills" ] && [ ! -L "$SKILLS/scrills" ]; then
-        echo "skipped  $SKILLS/scrills exists and is not a symlink - left untouched"
+linked_skills=
+link_skill() {
+    skills=$1
+    if [ -e "$skills/scrills" ] && [ ! -L "$skills/scrills" ]; then
+        echo "skipped  $skills/scrills exists and is not a symlink - left untouched"
     else
-        ln -sfn "$root/scrills" "$SKILLS/scrills"
-        linked_skill=$SKILLS/scrills
-        echo "linked   $linked_skill -> $root/scrills"
+        ln -sfn "$root/scrills" "$skills/scrills"
+        linked_skills="$linked_skills $skills/scrills"
+        echo "linked   $skills/scrills -> $root/scrills"
+    fi
+}
+
+if [ "$want_skill" = yes ]; then
+    if [ -d "$CLAUDE_SKILLS" ]; then
+        link_skill "$CLAUDE_SKILLS"
+    fi
+    if [ -d "$PI_AGENT" ]; then
+        mkdir -p "$PI_SKILLS"
+        link_skill "$PI_SKILLS"
     fi
 fi
 
@@ -76,5 +89,5 @@ echo
 echo
 echo "start here:  scrills list"
 echo "upgrade:     git -C $root pull"
-echo "uninstall:   rm -f $BIN/scrills $linked_skill"
+echo "uninstall:   rm -f $BIN/scrills$linked_skills"
 echo "             your library at ~/.scrills is yours - this never touches it"

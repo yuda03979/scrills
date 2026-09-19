@@ -11,7 +11,7 @@ scrills/SKILL.md          the manual agents read; also where the version lives
 examples/.scrills/        the examples project layer (harness wiring today)
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
-install.sh                two symlinks, nothing else
+install.sh                command symlink plus detected harness skill links, nothing else
 ```
 
 The command is a symlink into this repo, and the CLI finds `SKILL.md` by walking up from its own
@@ -53,7 +53,7 @@ skills spec — only `scrills/SKILL.md` follows it, because only that file is a 
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **94 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **97 passed**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
 spend money or make noise.**

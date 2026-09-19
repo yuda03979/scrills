@@ -1548,3 +1548,25 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
         link = bin_dir / "scrills"
         assert link.is_symlink()
         assert os.path.realpath(link) == os.path.realpath(CLI)
+
+
+def test_install_sh_links_the_skill_for_claude_and_pi(tmp_path):
+    repo = Path(CLI).resolve().parent.parent.parent
+    fake = tmp_path / "fakehome"
+    claude_skills = fake / ".claude" / "skills"
+    pi_agent = fake / "custom-pi-agent"
+    claude_skills.mkdir(parents=True)
+    pi_agent.mkdir(parents=True)
+    env = {
+        **base_env(),
+        "HOME": str(fake),
+        "PI_CODING_AGENT_DIR": str(pi_agent),
+        "SCRILLS_BIN": str(tmp_path / "bin"),
+        "SCRILLS_SRC": str(tmp_path / "src"),
+        "SCRILLS_REPO": str(tmp_path / "norepo"),
+    }
+    result = subprocess.run(["sh", "install.sh"], cwd=str(repo), env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for link in (claude_skills / "scrills", pi_agent / "skills" / "scrills"):
+        assert link.is_symlink()
+        assert os.path.realpath(link) == os.path.realpath(SKILL.parent)
