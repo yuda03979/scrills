@@ -49,7 +49,7 @@ cd examples
 scrills list
 ```
 
-`list` is the front door — every scrill, its manual's frontmatter, and which ones run standalone. What ships today is `harness_config`, harness wiring for Claude Code (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
+`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. What ships today is `harness_config`, harness wiring for Claude Code (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
 
 `scrills py` behaves like a disposable REPL: stdout passes through, the trailing expression echoes (truncated past 8,192 characters — print to a file for the full thing), top level may `await`, and nothing persists between calls — anything worth keeping goes in a file. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
@@ -106,7 +106,7 @@ echo "Hello, World" | scrills run slug
 
 The anatomy, in order of importance:
 
-- **The docstring is the manual.** Frontmatter (`name`, `description`, `version`) exactly like a SKILL.md, then prose. The description says *when* to use it; the docstrings say *how*. `scrills list` shows the frontmatter without executing anything.
+- **The docstring is the manual.** Frontmatter (`name`, `description`, `version`) exactly like a SKILL.md, then prose. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how*. `scrills list` parses files without executing anything.
 - Optional siblings (`helper.py`, imported as `from .helper import x`) and an optional `references/` folder for longer material — docs read on demand, plus deeper modules importable as `from .references import x`.
 - **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.
 - One scrill imports another with `from scrills import <name>`.
@@ -156,7 +156,7 @@ Scrills are built for coding agents: the library is how capability survives the 
 - Claude Code: `ln -s "$PWD/scrills" ~/.claude/skills/scrills`
 - Anything else: paste `scrills/SKILL.md` into the session, or reference its path.
 
-The `harness_config` example automates the Claude Code half and adds the permission rule that lets sessions run `scrills` unprompted: `cd examples && scrills run harness_config apply`. Add `--hook` and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. It lives in the examples layer, so copy or symlink it into `~/.scrills` to have it anywhere; `status` shows what's wired, `undo` removes exactly what apply added.
+The `harness_config` example automates the Claude Code half and adds the permission rule that lets sessions run `scrills` unprompted: `cd examples && scrills run harness_config apply`. Add `--hook` and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. It lives in the examples layer, so copy it into `~/.scrills` to have it anywhere; `status` shows what's wired, `undo` removes exactly what apply added.
 
 A taught agent checks `scrills list` before writing logic, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
 

@@ -4,14 +4,14 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). Nothing to install.
 license: Apache-2.0
 metadata:
-  version: "0.2.10"
+  version: "0.2.11"
 ---
 
 # scrills
 
 Skills are knowledge you read; scrills are capability you call. A scrill is a Python module whose docstring is its SKILL.md — the manual and the implementation are one artifact. The command is `scrills`.
 
-Check the library before writing logic: `scrills list` shows every scrill, its manual's frontmatter, and which ones run standalone.
+Check the library before writing logic: `scrills list` prints the library the way a harness lists skills — one `- name: description` line per scrill — and raises anything wrong beneath an entry (a drifted manual, a shadowed name).
 
 ## The library
 
@@ -78,7 +78,7 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 ```
 
 - The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`, the one deliberate difference from the skills format. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
-- The description says *when* to use it; the rest of the docstring and each function's docstring say *how*. Longer material goes in `references/*.md`, named in the docstring.
+- The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). The rest of the docstring and each function's docstring say *how*; longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
 - State that survives between runs goes under `~/.scrills/.state/<name>/` (`$SCRILLS_HOME`-aware) — the scrill's own name, its own folder, never another's.

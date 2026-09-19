@@ -1,8 +1,8 @@
 """
 ---
 name: harness_config
-description: Use to point a coding harness at scrills. Claude Code today - checks and writes the harness-side wiring (the skill symlink, one Bash permission rule, and an opt-in session hook that injects the library listing) so sessions know scrills and run it unprompted. Nothing changes unless apply is called.
-version: 0.1.1
+description: Use to point a coding harness at scrills. Claude Code today - checks and writes the harness-side wiring (the skill symlink, one Bash permission rule, and an opt-in session hook that injects the library listing) so sessions know scrills and run it unprompted. Run: scrills run harness_config [status|apply [--hook]|undo]; nothing changes unless apply is called.
+version: 0.1.2
 ---
 
 status(harness="claude") -> {harness, found, skill_link, permission, hook, link, settings, target}

@@ -82,7 +82,7 @@ SCRIPT = os.path.realpath(__file__)
 os.environ["SCRILLS_CLI"] = SCRIPT
 SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
 USAGE = """usage: scrills <verb>
-  list               the library: names, frontmatter, what runs standalone
+  list               the library, one "- name: description" line per scrill
   py                 run Python from stdin, once, with the library importable
   run <name> ...     run a scrill that defines main() as a program
   install <pkg> ...  install a package into the shared environment (pip)
@@ -520,6 +520,14 @@ def frontmatter_fields(lines):
     return fields
 
 
+def entry_description(lines, kind):
+    if kind == "frontmatter":
+        return (frontmatter_fields(lines) or {}).get("description", "")
+    if kind == "unclosed":
+        return ""
+    return lines[0]
+
+
 def notices(name, lines, kind):
     found = []
     if keyword.iskeyword(name):
@@ -538,19 +546,6 @@ def notices(name, lines, kind):
         if not fields.get(key):
             found.append(f"(no {key} in frontmatter)")
     return found
-
-
-def declares_main(tree):
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "main":
-            return True
-        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "main" for target in node.targets):
-            return True
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "main":
-            return True
-        if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) == "main" for alias in node.names):
-            return True
-    return False
 
 
 def may_bind_main(tree):
@@ -591,11 +586,6 @@ def parsed(entry):
         return ast.parse(source)
     except (SyntaxError, ValueError):
         return None
-
-
-def runnable(entry):
-    tree = parsed(entry)
-    return None if tree is None else declares_main(tree)
 
 
 def binds_main(entry):
@@ -994,12 +984,8 @@ def cmd_list():
         if not strays:
             return
     for name in sorted(merged):
-        scrill = merged[name]
-        mark = f"  (runs standalone: scrills run {name})" if runnable(scrill["entry"]) is True else ""
-        print(f"{name}  ({scrill['layer']}){mark}")
-        lines, kind = manifest(scrill["entry"])
-        for line in lines:
-            print(f"  {line}")
+        lines, kind = manifest(merged[name]["entry"])
+        print(f"- {name}: {entry_description(lines, kind)}".rstrip())
         for notice in notices(name, lines, kind):
             print(f"  {notice}")
     for name, layer in shadowed:

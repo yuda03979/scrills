@@ -181,7 +181,7 @@ def test_project_shadows_user(home, project):
     result = scrills(["py"], home, project, stdin="from scrills import shade\nshade.WHO")
     assert result.stdout == "'project'\n"
     listing = scrills(["list"], home, project)
-    assert "shade  (project)" in listing.stdout
+    assert "- shade: project layer" in listing.stdout
     assert "shade  (user, shadowed by project)" in listing.stdout
 
 
@@ -201,7 +201,7 @@ def test_scrill_imports_scrill(home, project):
     assert result.stdout == "4\n"
 
 
-def test_list_manifest_runnable_draft(home, project):
+def test_list_entries_are_skills_shaped(home, project):
     write_scrill(
         project / ".scrills",
         "tool",
@@ -210,8 +210,11 @@ def test_list_manifest_runnable_draft(home, project):
     )
     write_scrill(project / ".scrills", "_draft", "hidden")
     result = scrills(["list"], home, project)
-    assert "tool  (project)  (runs standalone: scrills run tool)" in result.stdout
-    assert "description: does things" in result.stdout
+    lines = result.stdout.splitlines()
+    assert "- tool: does things" in lines
+    assert "runs standalone" not in result.stdout
+    assert not any(line.strip() == "---" for line in lines)
+    assert not any(line.strip().startswith(("name:", "version:")) for line in lines)
     assert "more prose" not in result.stdout
     assert "_draft" not in result.stdout
 
@@ -256,7 +259,7 @@ def test_run_async_main(home, project):
     assert result.returncode == 5
     assert result.stdout == "awaited main\n"
     listing = scrills(["list"], home, project)
-    assert "runs standalone: scrills run aio" in listing.stdout
+    assert "- aio: aio" in listing.stdout
 
 
 def test_run_reexported_main(home, project):
@@ -271,7 +274,7 @@ def test_run_reexported_main(home, project):
     assert result.returncode == 0
     assert result.stdout == "via cli\n"
     listing = scrills(["list"], home, project)
-    assert "runs standalone: scrills run facade" in listing.stdout
+    assert "- facade: facade" in listing.stdout
 
 
 def test_run_new_syntax_scrill(home, project):
@@ -291,7 +294,8 @@ def test_run_new_syntax_scrill(home, project):
         """,
     )
     listing = scrills(["list"], home, project)
-    assert "runs standalone: scrills run matcher" in listing.stdout
+    assert "- matcher: matcher" in listing.stdout
+    assert "doesn't parse" not in listing.stdout
     result = scrills(["run", "matcher"], home, project)
     assert result.returncode == 0
     assert result.stdout == "one\n"
@@ -318,8 +322,8 @@ def test_source_decoding_matches_python(home, project):
     (legacy / "__init__.py").write_bytes(declared.encode("latin-1"))
     listing = scrills(["list"], home, project)
     assert "doesn't parse" not in listing.stdout
-    assert "runs standalone: scrills run bom" in listing.stdout
-    assert "café special" in listing.stdout
+    assert "- bom: opens with a byte order mark" in listing.stdout
+    assert "- legacy: café special" in listing.stdout
     ran = scrills(["run", "bom"], home, project)
     assert ran.returncode == 0
     assert ran.stdout == "bom ran\n"
@@ -411,10 +415,15 @@ def test_run_accepts_dynamic_main(home, project):
         assert f"{name} ran" in result.stdout
 
 
-def test_list_marker_covers_class_main(home, project):
-    write_scrill(project / ".scrills", "classy", "classy", "class main:\n    pass")
+def test_list_entry_fallbacks_without_frontmatter(home, project):
+    write_scrill(project / ".scrills", "prosey", "first line of prose\nsecond line")
+    silent = project / ".scrills" / "silent"
+    silent.mkdir(parents=True)
+    (silent / "__init__.py").write_text("VALUE = 1\n")
     listing = scrills(["list"], home, project)
-    assert "runs standalone: scrills run classy" in listing.stdout
+    assert "- prosey: first line of prose" in listing.stdout
+    assert "second line" not in listing.stdout
+    assert "- silent: (no module docstring, so it announces nothing)" in listing.stdout
 
 
 def test_other_uid_project_layer_is_ignored(home, tmp_path):
@@ -451,6 +460,7 @@ def test_list_notices_missing_and_unclosed_frontmatter(home, project):
     result = scrills(["list"], home, project)
     assert result.returncode == 0
     assert "(no frontmatter" in result.stdout
+    assert "- unclosed:\n" in result.stdout
     assert "never closes" in result.stdout
     assert "differs from folder" not in result.stdout
 
@@ -690,8 +700,7 @@ def test_pep723_block_keeps_docstring(home, project):
         "    return 0\n"
     )
     listing = scrills(["list"], home, project)
-    assert "description: declares deps" in listing.stdout
-    assert "runs standalone: scrills run blocky" in listing.stdout
+    assert "- blocky: declares deps" in listing.stdout
     result = scrills(["run", "blocky"], home, project)
     assert result.returncode == 0
     assert result.stdout == "blocky ran\n"
@@ -1421,7 +1430,7 @@ def test_old_launcher_relaunches_onto_venv(home, project):
         capture_output=True,
         text=True,
     )
-    assert "runs standalone: scrills run modern" in listing.stdout
+    assert "- modern: modern" in listing.stdout
 
 
 def test_registry_failure_is_harmless(home, project):
@@ -1501,7 +1510,7 @@ def test_a_scrill_may_carry_any_files(home, project):
     (folder / "assets" / "deep" / "notes.md").write_text("# notes\n")
     listed = scrills(["list"], home, project)
     assert listed.returncode == 0
-    assert "carry  (project)" in listed.stdout
+    assert "- carry: t" in listed.stdout
     assert "(doesn't parse" not in listed.stdout
     result = scrills(["py"], home, project, stdin="from scrills import carry\nprint(carry.table(), carry.note())\n")
     assert result.returncode == 0, result.stderr
@@ -1517,7 +1526,7 @@ def test_list_raises_frontmatter_drift(home, project):
     assert "(frontmatter name 'emailz' differs from folder 'emails' - the folder name is the import name)" in result.stdout
     assert "(no description in frontmatter)" in result.stdout
     assert "(no version in frontmatter)" in result.stdout
-    clean_chunk = result.stdout.split("clean  (project)")[1].split("emails  (project)")[0]
+    clean_chunk = result.stdout.split("- clean: d")[1].split("- emails: d")[0]
     assert "(no " not in clean_chunk
     assert "differs" not in clean_chunk
 

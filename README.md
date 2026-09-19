@@ -49,8 +49,8 @@ ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional
 cd examples && scrills list
 ```
 
-`list` is the front door: every scrill in your library, the frontmatter of its manual, and which
-ones run standalone. The repo ships one — `harness_config`, harness wiring for Claude Code — as a
+`list` is the front door: the library the way a harness lists skills, one `- name: description`
+line per scrill. The repo ships one — `harness_config`, harness wiring for Claude Code — as a
 live project layer you can read and run; your own scrills are what fill the library.
 
 A scrill is used two ways. As a library, from a one-shot Python snippet:

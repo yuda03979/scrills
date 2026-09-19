@@ -29,8 +29,9 @@ def scrills(args, home, stdin=None, extra_env=None, cwd=EXAMPLES):
 def test_list_shows_the_example_layer(home):
     result = scrills(["list"], home)
     assert result.returncode == 0
-    assert "harness_config  (project)" in result.stdout
-    assert "runs standalone: scrills run harness_config" in result.stdout
+    assert "- harness_config: Use to point a coding harness at scrills." in result.stdout
+    assert "scrills run harness_config" in result.stdout
+    assert "runs standalone" not in result.stdout
     assert "(no " not in result.stdout
     assert "differs from folder" not in result.stdout
 
