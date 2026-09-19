@@ -4,7 +4,7 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.14"
+  version: "0.2.15"
 ---
 
 # scrills
@@ -112,7 +112,7 @@ A proven project scrill moves to the user layer by a staged copy — never a sym
 cp -R .scrills/emails ~/.scrills/_emails && mv ~/.scrills/_emails ~/.scrills/emails
 ```
 
-The `_` draft keeps the half-copy invisible to every session; the final `mv` is atomic. Keep the frontmatter version honest — the same version with different content is drift; bump before copying. While you keep developing, the project copy shadows the released one and `py`/`run` say so. A scrill that imports project-only siblings breaks when promoted alone. Remove one with `rm -rf ~/.scrills/<name>` (its `.state/<name>` survives).
+The `_` draft keeps the half-copy invisible to every session; the final `mv` is atomic. For a **new** name only — `mv` and `cp -R` onto an existing folder nest instead of replacing; to upgrade an existing copy or retry over a stale draft, `rm -rf` that target first (a brief clean absence, never a half-copy). Keep the frontmatter version honest — the same version with different content is drift; bump before copying. While you keep developing, the project copy shadows the released one and `py`/`run` say so. A scrill that imports project-only siblings breaks when promoted alone. Remove one with `rm -rf ~/.scrills/<name>` (its `.state/<name>` survives).
 
 Third-party needs may be declared, PEP 723 style, above the docstring:
 

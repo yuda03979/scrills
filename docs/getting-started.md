@@ -2,7 +2,7 @@
 
 **Skills are knowledge you read. Scrills are capability you call.**
 
-A scrill is a Python module whose docstring is its manual — the documentation and the implementation are one artifact. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import it:
+A scrill is a Python module whose docstring is its manual — the documentation and the implementation are one artifact. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import it — say, an `emails` scrill you saved earlier (illustrative; your library starts empty):
 
 ```bash
 scrills py <<'PY'
@@ -32,8 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/yuda03979/scrills/main/install.sh |
 `install.sh` makes symlinks and stops: `scrills` on your PATH, plus the manual for detected Claude Code and Pi installs. Read it before you run it — it's short, and reading before running is the habit this whole thing is built around. By hand:
 
 ```bash
-ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
-ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
+mkdir -p ~/.local/bin && ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
+mkdir -p ~/.claude/skills && ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
 ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
@@ -108,7 +108,8 @@ echo "Hello, World" | scrills run slug
 
 The anatomy, in order of importance:
 
-- **The docstring is the manual.** Frontmatter (`name`, `description`, `version`) exactly like a SKILL.md, then prose. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how*. `scrills list` parses files without executing anything.
+- **The docstring is the manual.** SKILL.md-shaped frontmatter (`name`, `description`, `version`), then prose. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how*. `scrills list` parses files without executing anything.
+- **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself — and its output goes wherever that process points. Real work lives in functions or `main()`.
 - Optional siblings (`helper.py`, imported as `from .helper import x`) and an optional `references/` folder for longer material — docs read on demand, plus deeper modules importable as `from .references import x`.
 - **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.
 - One scrill imports another with `from scrills import <name>`.
@@ -127,7 +128,7 @@ When a project scrill proves itself and you want it everywhere, promote it by a 
 cp -R .scrills/slug ~/.scrills/_slug && mv ~/.scrills/_slug ~/.scrills/slug
 ```
 
-The `_` prefix keeps the half-copied folder invisible while it lands (drafts don't list), and the final `mv` is atomic — no session ever sees a partial scrill. Never symlink a project scrill into `~/.scrills`: through a symlink every edit goes live for every session on the machine, and one broken import in a dev tree breaks them all. Keep the frontmatter version honest — if you copy changed content under the same version, nothing can tell the two apart later; bump first. While you keep developing, the project copy shadows the promoted one inside that project, and `py`/`run` tell you so. To remove one: `rm -rf ~/.scrills/<name>` (anything it kept under `~/.scrills/.state/<name>` stays until you delete that too).
+The `_` prefix keeps the half-copied folder invisible while it lands (drafts don't list), and the final `mv` is atomic — no session ever sees a partial scrill. That two-step is for a *new* name: `mv` (and `cp -R`) onto an existing folder nests instead of replacing — so upgrading an existing copy, or retrying over a stale `_slug`, starts with `rm -rf` of that target (a brief clean absence, never a half-copy). Never symlink a project scrill into `~/.scrills`: through a symlink every edit goes live for every session on the machine, and one broken import in a dev tree breaks them all. Keep the frontmatter version honest — if you copy changed content under the same version, nothing can tell the two apart later; bump first. While you keep developing, the project copy shadows the promoted one inside that project, and `py`/`run` tell you so. To remove one: `rm -rf ~/.scrills/<name>` (anything it kept under `~/.scrills/.state/<name>` stays until you delete that too).
 
 ## See what ran
 
@@ -147,7 +148,7 @@ Failures say why: an uncaught exception records its type and where it broke (nev
 
 A run that never finished — killed, crashed, power loss — surfaces as `died` the first time anything looks. That makes unattended scrills honest: schedule a one-shot scrill from cron or launchd — `echo app.log | scrills run report` — and `ps` tells you whether it actually ran, and how it ended.
 
-One macOS constraint for scheduled work: launchd and cron jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — the same command that works in your terminal dies with EPERM. Keep the scrills clone outside those folders; the one-line installer's default (`~/.local/share/scrills`) already is.
+One macOS constraint for scheduled work: launchd and cron jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — the same command that works in your terminal dies with EPERM. Keep the scrills clone outside those folders; the one-line installer's default (`~/.local/share/scrills`) already is. And a scheduled job's working directory decides its project layer: cron starts you in `$HOME`, launchd in `/` — a scheduled *project* scrill needs the job to `cd` into the project first (or launchd's `WorkingDirectory`), or it resolves the user layer only and `run` fails with *no scrill named …* in the job's log.
 
 Attribution is one optional convention: export `SCRILLS_WHO=<something>:<something>` (a cron line, a harness) and runs carry the label.
 
@@ -163,11 +164,7 @@ pip behind it — arguments pass through (`-U`, `==` pins, `-r`), and `scrills w
 
 ## Teach your agent
 
-Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise, from the clone root (`cd ..` first if you're still in `examples/`):
-
-- Claude Code: `ln -s "$PWD/scrills" ~/.claude/skills/scrills`
-- Pi: `mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills" && ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"`
-- Anything else: paste `scrills/SKILL.md` into the session, or reference its path.
+Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise the skill-link lines are in the by-hand Install block above, and for any other harness, paste `scrills/SKILL.md` into the session or reference its path.
 
 The `harness_config` example automates the wiring from inside scrills itself:
 
