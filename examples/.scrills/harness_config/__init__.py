@@ -32,7 +32,7 @@ Exit 0 configured or done, 1 not configured, 2 usage.
 """
 import sys
 
-from . import _claude
+from .harness import _claude
 
 HARNESSES = {"claude": _claude}
 
