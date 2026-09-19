@@ -453,6 +453,64 @@ def test_shadow_notice_on_py_and_run(home, project):
     assert "shadow" not in linked.stderr
 
 
+def test_lost_project_layer_is_said(home, tmp_path):
+    caller = tmp_path / "callerproj" / ".scrills"
+    caller.mkdir(parents=True)
+    nowhere = tmp_path / "state"
+    nowhere.mkdir()
+    inherited = {"SCRILLS_LAYERS": f"{caller}{os.pathsep}{home}"}
+    result = scrills(["py"], home, nowhere, stdin="1", extra_env=inherited)
+    assert result.returncode == 0
+    assert "the caller had one" in result.stderr
+    assert str(caller) in result.stderr
+    where = scrills(["where"], home, nowhere, extra_env=inherited)
+    assert "the caller had one" in where.stdout
+    assert str(caller) in where.stdout
+
+
+def test_lost_project_stays_silent(home, project, tmp_path):
+    caller = tmp_path / "elsewhere" / ".scrills"
+    caller.mkdir(parents=True)
+    inherited = {"SCRILLS_LAYERS": f"{caller}{os.pathsep}{home}"}
+    resolved = scrills(["py"], home, project, stdin="1", extra_env=inherited)
+    assert resolved.returncode == 0
+    assert "caller had" not in resolved.stderr
+    homeonly = scrills(["py"], home, tmp_path, stdin="1", extra_env={"SCRILLS_LAYERS": str(home)})
+    assert homeonly.returncode == 0
+    assert "caller had" not in homeonly.stderr
+    plain = scrills(["py"], home, tmp_path, stdin="1")
+    assert plain.returncode == 0
+    assert "caller had" not in plain.stderr
+
+
+def test_lost_project_notice_travels_the_real_chain(home, project, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("statehome")
+    write_scrill(
+        project / ".scrills",
+        "spawner",
+        "spawner",
+        f"""
+        import os
+        import subprocess
+        import sys
+        def main():
+            child = subprocess.run(
+                [os.environ["SCRILLS_CLI"], "py"],
+                input="1",
+                cwd={str(outside)!r},
+                capture_output=True,
+                text=True,
+            )
+            sys.stderr.write(child.stderr)
+            return child.returncode
+        """,
+    )
+    result = scrills(["run", "spawner"], home, project)
+    assert result.returncode == 0, result.stderr
+    assert "the caller had one" in result.stderr
+    assert str(project / ".scrills") in result.stderr
+
+
 def test_list_notices_missing_and_unclosed_frontmatter(home, project):
     write_scrill(project / ".scrills", "nofm", "just prose, no fences")
     write_scrill(project / ".scrills", "unclosed", "---\nname: unclosed\ndescription: d")

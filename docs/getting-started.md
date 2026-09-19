@@ -121,6 +121,14 @@ The anatomy, in order of importance:
 
 Both are visible everywhere under a project; project wins on a name collision. `scrills where` shows both paths, the python, and how to install a package.
 
+When a project scrill proves itself and you want it everywhere, promote it by a staged copy:
+
+```bash
+cp -R .scrills/slug ~/.scrills/_slug && mv ~/.scrills/_slug ~/.scrills/slug
+```
+
+The `_` prefix keeps the half-copied folder invisible while it lands (drafts don't list), and the final `mv` is atomic — no session ever sees a partial scrill. Never symlink a project scrill into `~/.scrills`: through a symlink every edit goes live for every session on the machine, and one broken import in a dev tree breaks them all. Keep the frontmatter version honest — if you copy changed content under the same version, nothing can tell the two apart later; bump first. While you keep developing, the project copy shadows the promoted one inside that project, and `py`/`run` tell you so. To remove one: `rm -rf ~/.scrills/<name>` (anything it kept under `~/.scrills/.state/<name>` stays until you delete that too).
+
 ## See what ran
 
 Every `py` and `run` is recorded — metadata only (verb, name, pid, cwd, timing, exit; never code, arguments, or output):
@@ -138,6 +146,8 @@ log: ~/.scrills/.runs/log.jsonl
 Failures say why: an uncaught exception records its type and where it broke (never its message), and a scrill can name the exit codes its `main()` chooses — `EXITS = {1: "no answer"}` beside it — so a meaningful non-zero exit is recorded as a named outcome, not as an `error`.
 
 A run that never finished — killed, crashed, power loss — surfaces as `died` the first time anything looks. That makes unattended scrills honest: schedule a one-shot scrill from cron or launchd — `echo app.log | scrills run report` — and `ps` tells you whether it actually ran, and how it ended.
+
+One macOS constraint for scheduled work: launchd and cron jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — the same command that works in your terminal dies with EPERM. Keep the scrills clone outside those folders; the one-line installer's default (`~/.local/share/scrills`) already is.
 
 Attribution is one optional convention: export `SCRILLS_WHO=<something>:<something>` (a cron line, a harness) and runs carry the label.
 

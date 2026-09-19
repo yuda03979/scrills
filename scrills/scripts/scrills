@@ -424,6 +424,25 @@ def warn_shadows(found):
         )
 
 
+def caller_project(home, found):
+    if any(label == "project" for label, _ in found):
+        return None
+    default = os.path.realpath(os.path.join(os.path.expanduser("~"), ".scrills"))
+    for entry in os.environ.get("SCRILLS_LAYERS", "").split(os.pathsep):
+        if entry and os.path.realpath(entry) not in (os.path.realpath(home), default):
+            return entry
+    return None
+
+
+def warn_lost_project(home, found):
+    caller = caller_project(home, found)
+    if caller is not None:
+        print(
+            f"scrills: no project layer - the caller had one ({caller}); spawn children from the project root to keep it",
+            file=sys.stderr,
+        )
+
+
 def scan(directory):
     try:
         names = sorted(os.listdir(directory))
@@ -926,6 +945,7 @@ def cmd_py(argv):
     home, found, foreign = layers()
     warn_foreign(foreign)
     warn_shadows(found)
+    warn_lost_project(home, found)
     python = ensure_runtime(home)
     export_layers(found)
     run_id = os.urandom(8).hex()
@@ -942,6 +962,7 @@ def cmd_run(argv):
     home, found, foreign = layers()
     warn_foreign(foreign)
     warn_shadows(found)
+    warn_lost_project(home, found)
     merged, _ = library(found)
     if name not in merged:
         available = ", ".join(sorted(merged)) or "none yet"
@@ -1113,7 +1134,9 @@ def cmd_where():
     elif foreign:
         project_line = f"project: none (nearest .scrills at {foreign[0]} is owned by uid {foreign[1]}, not you - ignored)"
     else:
-        project_line = f"project: none (no .scrills between {os.getcwd()} and /)"
+        caller = caller_project(home, found)
+        tail = f"; the caller had one: {caller}" if caller else ""
+        project_line = f"project: none (no .scrills between {os.getcwd()} and /{tail})"
     lines = [
         project_line,
         f"user library: {home}" + ("" if os.path.isdir(home) else "  (not created yet)"),

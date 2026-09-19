@@ -53,7 +53,7 @@ skills spec — only `scrills/SKILL.md` follows it, because only that file is a 
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **97 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **100 passed**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
 spend money or make noise.**

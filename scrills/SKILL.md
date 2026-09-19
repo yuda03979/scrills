@@ -4,7 +4,7 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). Nothing to install.
 license: Apache-2.0
 metadata:
-  version: "0.2.12"
+  version: "0.2.13"
 ---
 
 # scrills
@@ -17,7 +17,7 @@ Check the library before writing logic: `scrills list` prints the library the wa
 
 Two layers, merged, project wins on a name collision:
 
-- **project**: the nearest `.scrills/` directory walking up from where you are — reviewed and committed with the project. One it doesn't take: a `.scrills` owned by another user is ignored, and `list`, `py`, `run` and `where` say so.
+- **project**: the nearest `.scrills/` directory walking up from where you are — reviewed and committed with the project. Resolution is from your cwd only: a process started elsewhere (a detached child, a state-folder cwd) has no project layer, and `py`/`run` print one stderr line when the caller had one. One it doesn't take: a `.scrills` owned by another user is ignored, and `list`, `py`, `run` and `where` say so.
 - **user**: `~/.scrills` (or `$SCRILLS_HOME`) — capability that travels across projects.
 
 A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed — unless the two sides are the same file through a symlink (an installed mirror), which replaces nothing and stays silent. Either way `list` shows the pair: `<name>  (user, shadowed by project)`. `scrills where` shows both paths, the python, the resolver, and how to install a package.
@@ -39,7 +39,7 @@ The description says when to use a scrill; `help()` says how. But `help()` rende
 
 Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
-A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs. Being a program, it also slots straight into cron or launchd — one-shot checks, scheduled work. Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry.
+A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs. Being a program, it also slots straight into cron or launchd — one-shot checks, scheduled work. Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry. On macOS, scheduled jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — keep the scrills clone outside them; the piped installer's default (`~/.local/share/scrills`) already is.
 
 Input reaches a scrill four ways: function arguments when imported — the main way; argv and stdin when run as a program (`echo data | scrills run it a b`); environment variables inherited from the caller (secrets travel this way, read at call time); and files, relative to your working directory. The catch: `scrills py`'s stdin already carries the code, so there is none left for data. Pass big data as a file path, never pasted into the snippet; `some-command | scrills py` feeds that output to the compiler — write it to a file first, run the command from inside the Python, or use `scrills run`, which does take stdin.
 
@@ -81,6 +81,7 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 - The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). The rest of the docstring and each function's docstring say *how*; longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
+- **Detached children lose the project layer.** The project layer belongs to your caller's cwd, exactly like the working directory. A child you spawn from a state folder resolves no project scrills — capture the caller's cwd at call time and pass it as the child's `cwd=`; any subdirectory of the project works, the walk-up does the rest.
 - State that survives between runs goes under `~/.scrills/.state/<name>/` (`$SCRILLS_HOME`-aware) — the scrill's own name, its own folder, never another's.
 - **A sync function never calls `asyncio.run()`.** A `py` snippet that awaits anywhere runs inside an event loop, where `asyncio.run()` raises. For concurrency inside sync code use threads; offer an `async def` twin for callers that await.
 - A name starting with `_` is a draft, invisible until renamed.
@@ -96,6 +97,14 @@ import httpx                     # third-party, from the shared environment
 ```
 
 A project scrill may import a user scrill; the reverse works only inside that project — treat it as a smell.
+
+A proven project scrill moves to the user layer by a staged copy — never a symlink (an edit would go live machine-wide):
+
+```bash
+cp -R .scrills/emails ~/.scrills/_emails && mv ~/.scrills/_emails ~/.scrills/emails
+```
+
+The `_` draft keeps the half-copy invisible to every session; the final `mv` is atomic. Keep the frontmatter version honest — the same version with different content is drift; bump before copying. While you keep developing, the project copy shadows the released one and `py`/`run` say so. A scrill that imports project-only siblings breaks when promoted alone. Remove one with `rm -rf ~/.scrills/<name>` (its `.state/<name>` survives).
 
 Third-party needs may be declared, PEP 723 style, above the docstring:
 
