@@ -24,8 +24,9 @@ realpath. Keep `scrills/scripts/scrills` and `scrills/SKILL.md` in that relation
   reads it before anything relaunches onto the venv. Check with
   `python3 -c "import ast; ast.parse(open('scrills/scripts/scrills').read(), feature_version=(3,9))"`.
 - **Docstrings are the product.** A scrill's module and function docstrings are its manual —
-  `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` may carry
-  the manual instead, and wins when both declare frontmatter). Never strip a docstring anywhere under
+  `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` is the
+  manual when present — the docstring then explains its own file, and a frontmattered one is
+  ignored as a manifest, aloud). Never strip a docstring anywhere under
   `examples/.scrills/` or in a scrill you write. Elsewhere, prefer clear names over comments;
   the CLI keeps its explanation in one block at the top of the file and none below it.
 - **The version lives once**, in `scrills/SKILL.md` frontmatter under `metadata.version`. The CLI
@@ -38,7 +39,7 @@ realpath. Keep `scrills/scripts/scrills` and `scrills/SKILL.md` in that relation
 
 ## Scrills are not skills, in one deliberate way
 
-A scrill's manual — docstring frontmatter, or a `SKILL.md` beside `__init__.py` — looks like a
+A scrill's manual — a `SKILL.md` beside `__init__.py`, or the docstring in the one-file shape — looks like a
 SKILL.md and differs on purpose: the name is a **Python identifier**, so `_` where a skill name
 would have `-` (the folder name is the import name, and an identifier can't hold a hyphen).
 `version` may sit top-level or under `metadata:` as the spec nests it — both are read.
@@ -54,7 +55,7 @@ because only that file is claimed as a skill.
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **106 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **107 passed**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
 spend money or make noise.**

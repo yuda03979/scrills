@@ -1625,7 +1625,7 @@ def test_skill_md_manifest_lists_imports_and_runs(home, project):
     assert log_records(home, "filed")[-1]["imported"] == {"filed": "1.2.3"}
 
 
-def test_skill_md_wins_and_double_declaration_is_raised(home, project):
+def test_skill_md_is_the_manual_and_a_manifest_docstring_is_ignored_aloud(home, project):
     folder = write_scrill(
         project / ".scrills",
         "twice",
@@ -1636,11 +1636,30 @@ def test_skill_md_wins_and_double_declaration_is_raised(home, project):
     listing = scrills(["list"], home, project)
     assert "- twice: from the file" in listing.stdout
     assert "from the docstring" not in listing.stdout
-    assert "SKILL.md wins" in listing.stdout
+    assert "ignored: SKILL.md is the manual, the docstring explains the file" in listing.stdout
     used = scrills(["py"], home, project, stdin="from scrills import twice\ntwice.VALUE")
     assert used.returncode == 0
     assert used.stdout == "1\n"
     assert log_records(home, "py")[-1]["imported"] == {"twice": "0.2.0"}
+
+
+def test_a_prose_skill_md_is_still_the_manual(home, project):
+    folder = write_scrill(
+        project / ".scrills",
+        "mixed",
+        "---\nname: mixed\ndescription: from the docstring\nversion: 0.1.0\n---",
+        "VALUE = 3",
+    )
+    (folder / "SKILL.md").write_text("readme prose only, no fences\nsecond line\n")
+    listing = scrills(["list"], home, project)
+    assert "- mixed: readme prose only, no fences" in listing.stdout
+    assert "from the docstring" not in listing.stdout
+    chunk = entry_chunk(listing.stdout, "- mixed: readme prose only, no fences")
+    assert "(no frontmatter - open SKILL.md with" in chunk
+    assert "ignored: SKILL.md is the manual, the docstring explains the file" in chunk
+    used = scrills(["py"], home, project, stdin="from scrills import mixed\nmixed.VALUE")
+    assert used.returncode == 0
+    assert log_records(home, "py")[-1]["imported"] == {"mixed": None}
 
 
 def test_skill_md_beside_a_prose_docstring_is_silent(home, project):

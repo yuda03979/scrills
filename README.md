@@ -2,8 +2,8 @@
 
 **Skills are knowledge you read. Scrills are capability you call.**
 
-A scrill is a Python module that carries its own manual — in its head docstring, or as a
-SKILL.md file beside the code: one folder holding both. You collect them in a library, and instead of rewriting the same
+A scrill is a Python module that carries its own manual — a SKILL.md beside the code, or its
+head docstring in the one-file shape: one folder holding both. You collect them in a library, and instead of rewriting the same
 parsing, checking and fetching logic in every session, you import it:
 
 ```bash
@@ -74,7 +74,7 @@ echo "unread from:support" | scrills run emails
 ## The format
 
 A scrill is a folder in a `.scrills` directory. Folder name = import name. Entry is always
-`__init__.py`, and the manual is its docstring — or a `SKILL.md` beside it.
+`__init__.py`. The manual is a `SKILL.md` beside it — or its docstring, in the one-file shape.
 
 ```python
 """
@@ -94,9 +94,10 @@ def fetch(query):
     ...
 ```
 
-That's the whole format. The same manual may live in a `SKILL.md` beside `__init__.py`
-instead — a skill folder becomes a scrill by adding `__init__.py`. Optional siblings, an
-optional `references/` folder, and `from scrills import <name>` to use one scrill from another.
+That's the one-file shape. The manual may instead be a `SKILL.md` beside `__init__.py` — the
+file a person reads, and how a skill folder becomes a scrill — with each docstring explaining
+its own file. Optional siblings, an optional `references/` folder, and
+`from scrills import <name>` to use one scrill from another.
 
 ## Two layers
 

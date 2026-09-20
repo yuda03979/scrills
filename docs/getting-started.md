@@ -2,7 +2,7 @@
 
 **Skills are knowledge you read. Scrills are capability you call.**
 
-A scrill is a Python module that carries its own manual — in its head docstring, or as a SKILL.md file beside the code: one folder holding both. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import it — say, an `emails` scrill you saved earlier (illustrative; your library starts empty):
+A scrill is a Python module that carries its own manual — a SKILL.md beside the code, or its head docstring in the one-file shape: one folder holding both. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import it — say, an `emails` scrill you saved earlier (illustrative; your library starts empty):
 
 ```bash
 scrills py <<'PY'
@@ -108,7 +108,7 @@ echo "Hello, World" | scrills run slug
 
 The anatomy, in order of importance:
 
-- **The manual is the docstring — or a `SKILL.md` beside `__init__.py`.** SKILL.md-shaped frontmatter (`name`, `description`, `version` — top-level or under `metadata:`, both read), then prose; a skill folder becomes a scrill by adding `__init__.py`. Declare the manual once: when both the file and the docstring open with frontmatter, SKILL.md wins and `list` says so. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how* — every `.py` file opens with a head docstring saying what it holds. `scrills list` parses files without executing anything.
+- **The manual is a `SKILL.md` beside `__init__.py` — or the docstring, in the one-file shape.** SKILL.md-shaped frontmatter (`name`, `description`, `version` — top-level or under `metadata:`, both read), then prose; a skill folder becomes a scrill by adding `__init__.py`. Two files, two purposes: SKILL.md is the manual a person reads, a docstring explains its own file — when `SKILL.md` exists, a frontmattered docstring is ignored as a manifest and `list` says so. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how* — every `.py` file opens with a head docstring saying what it holds. `scrills list` parses files without executing anything.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself — and its output goes wherever that process points. Real work lives in functions or `main()`.
 - Optional siblings (`helper.py`, imported as `from .helper import x`) and an optional `references/` folder for longer material — docs read on demand, plus deeper modules importable as `from .references import x`.
 - **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.

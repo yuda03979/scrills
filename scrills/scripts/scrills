@@ -2,8 +2,10 @@
 # scrills: skills you import instead of read. One stdlib file, driven from bash in any harness.
 #
 # A scrill is a folder in a .scrills directory: <name>/__init__.py plus its manual, opening with
-# SKILL.md-style frontmatter - in the module docstring, or in a SKILL.md file beside __init__.py
-# (when both declare frontmatter, SKILL.md wins and list says so). Two layers, project over user: the nearest
+# SKILL.md-style frontmatter. Two files, two purposes: a SKILL.md beside __init__.py is the
+# manual - the one a person reads - and a docstring explains its own file; without a SKILL.md
+# the module docstring carries the manual (the one-file shape). When SKILL.md exists, a
+# frontmattered docstring is ignored as a manifest and list says so. Two layers, project over user: the nearest
 # .scrills walking up from the cwd (never the user library, never the default ~/.scrills even
 # when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
 # aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
@@ -174,27 +176,25 @@ def _note_error(error):
 def _fm_version(text):
     lines = [line.strip() for line in text.strip().splitlines()]
     if not lines or lines[0] != '---':
-        return False, None
+        return None
     for line in lines[1:]:
         if line == '---':
-            return True, None
+            return None
         if line.startswith('version:'):
             value = line[len('version:'):].strip()
             if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
                 value = value[1:-1]
-            return True, (value or None)
-    return True, None
+            return value or None
+    return None
 def _version_of(module):
     entry = getattr(module, '__file__', None)
     if entry:
         try:
             with open(os.path.join(os.path.dirname(entry), 'SKILL.md'), encoding='utf-8', errors='replace') as handle:
-                declared, value = _fm_version(handle.read())
-            if declared:
-                return value
+                return _fm_version(handle.read())
         except OSError:
             pass
-    return _fm_version(getattr(module, '__doc__', None) or '')[1]
+    return _fm_version(getattr(module, '__doc__', None) or '')
 def _write_record():
     if CARD is None or not OUTCOME or os.getpid() != BOOT_PID:
         return
@@ -542,19 +542,14 @@ def manifest(entry):
         except (SyntaxError, ValueError) as error:
             problem = f"(doesn't parse: {error})"
     doc_lines, doc_kind = classify(doc) if doc is not None else (None, None)
-    if skill_kind in ("frontmatter", "unclosed"):
+    if skill_kind is not None:
         extra = [problem] if problem else []
         if doc_kind in ("frontmatter", "unclosed"):
-            extra.append("(frontmatter in both SKILL.md and the docstring - SKILL.md wins; declare the manual once)")
-        return skill_lines, skill_kind, extra
+            extra.append("(the docstring also opens with frontmatter - ignored: SKILL.md is the manual, the docstring explains the file)")
+        return (skill_lines or ["(empty SKILL.md)"]), skill_kind, True, extra
     if doc_kind is not None:
-        lines = doc_lines
-        if doc_kind == "prose" and not lines:
-            lines = skill_lines if skill_kind == "prose" and skill_lines else ["(empty docstring)"]
-        return lines, doc_kind, []
-    if skill_kind == "prose" and skill_lines:
-        return skill_lines, "prose", [problem] if problem else []
-    return [problem or "(no module docstring, so it announces nothing)"], None, []
+        return (doc_lines or ["(empty docstring)"]), doc_kind, False, []
+    return [problem or "(no module docstring, so it announces nothing)"], None, False, []
 
 
 def frontmatter_fields(lines):
@@ -579,14 +574,15 @@ def entry_description(lines, kind):
     return lines[0]
 
 
-def notices(name, lines, kind):
+def notices(name, lines, kind, filed=False):
     found = []
     if keyword.iskeyword(name):
         found.append(f"(python keyword - `from scrills import {name}` won't parse; rename, or reach it via run/importlib)")
     if kind == "unclosed":
         return found + ["(frontmatter never closes - missing the second ---)"]
     if kind == "prose":
-        return found + ["(no frontmatter - open the docstring or a SKILL.md beside it with ---, name/description/version, ---)"]
+        where = "SKILL.md" if filed else "the docstring or a SKILL.md beside it"
+        return found + [f"(no frontmatter - open {where} with ---, name/description/version, ---)"]
     if kind != "frontmatter":
         return found
     fields = frontmatter_fields(lines) or {}
@@ -1037,9 +1033,9 @@ def cmd_list():
         if not strays:
             return
     for name in sorted(merged):
-        lines, kind, extra = manifest(merged[name]["entry"])
+        lines, kind, filed, extra = manifest(merged[name]["entry"])
         print(f"- {name}: {entry_description(lines, kind)}".rstrip())
-        for notice in notices(name, lines, kind) + extra:
+        for notice in notices(name, lines, kind, filed) + extra:
             print(f"  {notice}")
     for name, layer in shadowed:
         print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
