@@ -4,12 +4,12 @@ description: Skills you import instead of read. A library of Python capability, 
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.15"
+  version: "0.2.16"
 ---
 
 # scrills
 
-Skills are knowledge you read; scrills are capability you call. A scrill is a Python module whose docstring is its SKILL.md — the manual and the implementation are one artifact. The command is `scrills`.
+Skills are knowledge you read; scrills are capability you call. A scrill is a Python module that carries its own SKILL.md — as its head docstring, or as a file beside its code: one folder holding both. The command is `scrills`.
 
 Check the library before writing logic: `scrills list` prints the library the way a harness lists skills — one `- name: description` line per scrill — and raises anything wrong beneath an entry (a drifted manual, a shadowed name).
 
@@ -66,13 +66,14 @@ When logic proves useful beyond the moment, save it as a scrill: a folder in the
 ```
 .scrills/
   emails/
-    __init__.py      the scrill: manual in the docstring, code below it
+    __init__.py      the scrill: code, manual in its docstring
+    SKILL.md         optional: the manual as its own file instead
     helper.py        optional siblings
     references/      optional extra material: docs read on demand, deeper modules
     templates.json   anything else it needs - only __init__.py is required
 ```
 
-The module docstring opens with SKILL.md-shaped frontmatter:
+The manual — the module docstring, or `SKILL.md` — opens with SKILL.md-shaped frontmatter:
 
 ```python
 """
@@ -87,7 +88,8 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 """
 ```
 
-- The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`. That and the top-level `version` (the skills spec nests it under `metadata`) are the two deliberate differences from the skills format. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
+- The manual lives in one place: the docstring, or a `SKILL.md` beside `__init__.py` — so a skill folder becomes a scrill by adding `__init__.py`. When both open with frontmatter, SKILL.md wins and `list` says so; the docstring is then for the code. Every `.py` file opens with a head docstring saying what it holds — at least the functions in it.
+- The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`; that charset is the one deliberate difference from the skills format. `version` may sit top-level or under `metadata:` as the spec nests it — both are read. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
 - Optional `compatibility:` — one free-text line for what the scrill needs around it (a harness, a platform, a binary on PATH); the skills spec's own key, parsed like any frontmatter line. The description still carries the short form — it's all the listing shows.
 - The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). The rest of the docstring and each function's docstring say *how*; longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.

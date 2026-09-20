@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # scrills: skills you import instead of read. One stdlib file, driven from bash in any harness.
 #
-# A scrill is a folder in a .scrills directory: <name>/__init__.py whose module docstring is its
-# manual, opening with SKILL.md-style frontmatter. Two layers, project over user: the nearest
+# A scrill is a folder in a .scrills directory: <name>/__init__.py plus its manual, opening with
+# SKILL.md-style frontmatter - in the module docstring, or in a SKILL.md file beside __init__.py
+# (when both declare frontmatter, SKILL.md wins and list says so). Two layers, project over user: the nearest
 # .scrills walking up from the cwd (never the user library, never the default ~/.scrills even
 # when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
 # aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
@@ -170,20 +171,30 @@ def _note_error(error):
             OUTCOME['error_at'] = spot[0] + ':' + str(spot[1])
     except Exception:
         pass
-def _version_of(module):
-    doc = getattr(module, '__doc__', None) or ''
-    lines = [line.strip() for line in doc.strip().splitlines()]
+def _fm_version(text):
+    lines = [line.strip() for line in text.strip().splitlines()]
     if not lines or lines[0] != '---':
-        return None
+        return False, None
     for line in lines[1:]:
         if line == '---':
-            return None
+            return True, None
         if line.startswith('version:'):
             value = line[len('version:'):].strip()
             if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
                 value = value[1:-1]
-            return value or None
-    return None
+            return True, (value or None)
+    return True, None
+def _version_of(module):
+    entry = getattr(module, '__file__', None)
+    if entry:
+        try:
+            with open(os.path.join(os.path.dirname(entry), 'SKILL.md'), encoding='utf-8', errors='replace') as handle:
+                declared, value = _fm_version(handle.read())
+            if declared:
+                return value
+        except OSError:
+            pass
+    return _fm_version(getattr(module, '__doc__', None) or '')[1]
 def _write_record():
     if CARD is None or not OUTCOME or os.getpid() != BOOT_PID:
         return
@@ -505,24 +516,45 @@ def read_source(path):
         return None
 
 
-def manifest(entry):
-    source = read_source(entry)
-    if source is None:
-        return ["(unreadable)"], None
-    try:
-        doc = ast.get_docstring(ast.parse(source))
-    except (SyntaxError, ValueError) as error:
-        return [f"(doesn't parse: {error})"], None
-    if doc is None:
-        return ["(no module docstring, so it announces nothing)"], None
-    lines = doc.strip().split("\n")
+def classify(text):
+    lines = text.strip().split("\n")
     if lines[0].strip() == "---":
         for end in range(1, len(lines)):
             if lines[end].strip() == "---":
                 return lines[: end + 1], "frontmatter"
         return [lines[0]], "unclosed"
     first = next((line.strip() for line in lines if line.strip()), "")
-    return ([first] if first else ["(empty docstring)"]), "prose"
+    return ([first] if first else []), "prose"
+
+
+def manifest(entry):
+    skill_lines = skill_kind = None
+    skill_text = read_text(os.path.join(os.path.dirname(entry), "SKILL.md"))
+    if skill_text is not None:
+        skill_lines, skill_kind = classify(skill_text)
+    source = read_source(entry)
+    problem = doc = None
+    if source is None:
+        problem = "(unreadable)"
+    else:
+        try:
+            doc = ast.get_docstring(ast.parse(source))
+        except (SyntaxError, ValueError) as error:
+            problem = f"(doesn't parse: {error})"
+    doc_lines, doc_kind = classify(doc) if doc is not None else (None, None)
+    if skill_kind in ("frontmatter", "unclosed"):
+        extra = [problem] if problem else []
+        if doc_kind in ("frontmatter", "unclosed"):
+            extra.append("(frontmatter in both SKILL.md and the docstring - SKILL.md wins; declare the manual once)")
+        return skill_lines, skill_kind, extra
+    if doc_kind is not None:
+        lines = doc_lines
+        if doc_kind == "prose" and not lines:
+            lines = skill_lines if skill_kind == "prose" and skill_lines else ["(empty docstring)"]
+        return lines, doc_kind, []
+    if skill_kind == "prose" and skill_lines:
+        return skill_lines, "prose", [problem] if problem else []
+    return [problem or "(no module docstring, so it announces nothing)"], None, []
 
 
 def frontmatter_fields(lines):
@@ -554,7 +586,7 @@ def notices(name, lines, kind):
     if kind == "unclosed":
         return found + ["(frontmatter never closes - missing the second ---)"]
     if kind == "prose":
-        return found + ["(no frontmatter - open the docstring with ---, name/description/version, ---)"]
+        return found + ["(no frontmatter - open the docstring or a SKILL.md beside it with ---, name/description/version, ---)"]
     if kind != "frontmatter":
         return found
     fields = frontmatter_fields(lines) or {}
@@ -1005,9 +1037,9 @@ def cmd_list():
         if not strays:
             return
     for name in sorted(merged):
-        lines, kind = manifest(merged[name]["entry"])
+        lines, kind, extra = manifest(merged[name]["entry"])
         print(f"- {name}: {entry_description(lines, kind)}".rstrip())
-        for notice in notices(name, lines, kind):
+        for notice in notices(name, lines, kind) + extra:
             print(f"  {notice}")
     for name, layer in shadowed:
         print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")

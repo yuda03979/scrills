@@ -66,6 +66,23 @@ def write_scrill(root, name, doc, body=""):
     return folder
 
 
+def write_skill_md(root, name, text):
+    folder = Path(root) / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "SKILL.md").write_text(text)
+    return folder
+
+
+def entry_chunk(stdout, entry_line):
+    tail = stdout.split(entry_line + "\n", 1)[1]
+    kept = []
+    for line in tail.splitlines():
+        if line.startswith("- "):
+            break
+        kept.append(line)
+    return "\n".join(kept)
+
+
 @pytest.fixture
 def project(tmp_path):
     (tmp_path / ".scrills").mkdir()
@@ -1587,6 +1604,104 @@ def test_list_raises_frontmatter_drift(home, project):
     clean_chunk = result.stdout.split("- clean: d")[1].split("- emails: d")[0]
     assert "(no " not in clean_chunk
     assert "differs" not in clean_chunk
+
+
+def test_skill_md_manifest_lists_imports_and_runs(home, project):
+    folder = write_skill_md(
+        project / ".scrills",
+        "filed",
+        "---\nname: filed\ndescription: manual in a file\nversion: 1.2.3\n---\n\nprose body\n",
+    )
+    (folder / "__init__.py").write_text("def main():\n    print('ran')\n    return 0\n")
+    listing = scrills(["list"], home, project)
+    assert "- filed: manual in a file" in listing.stdout
+    chunk = entry_chunk(listing.stdout, "- filed: manual in a file")
+    assert "announces nothing" not in chunk
+    assert "(no " not in chunk
+    assert "prose body" not in listing.stdout
+    ran = scrills(["run", "filed"], home, project)
+    assert ran.returncode == 0
+    assert ran.stdout == "ran\n"
+    assert log_records(home, "filed")[-1]["imported"] == {"filed": "1.2.3"}
+
+
+def test_skill_md_wins_and_double_declaration_is_raised(home, project):
+    folder = write_scrill(
+        project / ".scrills",
+        "twice",
+        "---\nname: twice\ndescription: from the docstring\nversion: 0.1.0\n---",
+        "VALUE = 1",
+    )
+    (folder / "SKILL.md").write_text("---\nname: twice\ndescription: from the file\nversion: 0.2.0\n---\n")
+    listing = scrills(["list"], home, project)
+    assert "- twice: from the file" in listing.stdout
+    assert "from the docstring" not in listing.stdout
+    assert "SKILL.md wins" in listing.stdout
+    used = scrills(["py"], home, project, stdin="from scrills import twice\ntwice.VALUE")
+    assert used.returncode == 0
+    assert used.stdout == "1\n"
+    assert log_records(home, "py")[-1]["imported"] == {"twice": "0.2.0"}
+
+
+def test_skill_md_beside_a_prose_docstring_is_silent(home, project):
+    folder = write_scrill(project / ".scrills", "paired", "helper notes for readers", "VALUE = 2")
+    (folder / "SKILL.md").write_text("---\nname: paired\ndescription: d\nversion: 0.1.0\n---\n")
+    listing = scrills(["list"], home, project)
+    assert "- paired: d" in listing.stdout
+    assert "helper notes" not in listing.stdout
+    chunk = entry_chunk(listing.stdout, "- paired: d")
+    assert "SKILL.md wins" not in chunk
+    assert "(no " not in chunk
+
+
+def test_skill_md_manifest_survives_a_broken_init(home, project):
+    folder = write_skill_md(
+        project / ".scrills",
+        "brokefile",
+        "---\nname: brokefile\ndescription: still described\nversion: 0.1.0\n---\n",
+    )
+    (folder / "__init__.py").write_text("def main(:\n    pass\n")
+    listing = scrills(["list"], home, project)
+    assert "- brokefile: still described" in listing.stdout
+    assert "doesn't parse" in listing.stdout
+
+
+def test_skill_md_notices_unclosed_prose_and_name_drift(home, project):
+    unclosed = write_skill_md(project / ".scrills", "unfiled", "---\nname: unfiled\ndescription: d")
+    (unclosed / "__init__.py").write_text("VALUE = 1\n")
+    prose = write_skill_md(project / ".scrills", "prosefile", "a readme-ish first line\nsecond-prose-line\n")
+    (prose / "__init__.py").write_text("VALUE = 2\n")
+    drifted = write_skill_md(project / ".scrills", "renamed", "---\nname: rename\ndescription: d\nversion: 0.1.0\n---\n")
+    (drifted / "__init__.py").write_text("VALUE = 3\n")
+    listing = scrills(["list"], home, project)
+    assert "- unfiled:\n" in listing.stdout
+    assert "never closes" in listing.stdout
+    assert "- prosefile: a readme-ish first line" in listing.stdout
+    assert "second-prose-line" not in listing.stdout
+    assert "(no frontmatter" in listing.stdout
+    assert "announces nothing" not in listing.stdout
+    assert "(frontmatter name 'rename' differs from folder 'renamed' - the folder name is the import name)" in listing.stdout
+
+
+def test_nested_metadata_version_is_accepted_in_both_homes(home, project):
+    write_scrill(
+        project / ".scrills",
+        "nested",
+        '---\nname: nested\ndescription: d\nmetadata:\n  version: "3.1.4"\n---',
+        "VALUE = 1",
+    )
+    filed = write_skill_md(
+        project / ".scrills",
+        "nestedfile",
+        '---\nname: nestedfile\ndescription: d\nmetadata:\n  version: "2.7.1"\n---\n',
+    )
+    (filed / "__init__.py").write_text("VALUE = 2\n")
+    listing = scrills(["list"], home, project)
+    assert "(no version" not in listing.stdout
+    used = scrills(["py"], home, project, stdin="from scrills import nested, nestedfile\nnested.VALUE + nestedfile.VALUE")
+    assert used.returncode == 0
+    assert used.stdout == "3\n"
+    assert log_records(home, "py")[-1]["imported"] == {"nested": "3.1.4", "nestedfile": "2.7.1"}
 
 
 def test_install_sh_installs_the_clone_it_sits_in(tmp_path):

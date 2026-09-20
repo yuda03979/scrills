@@ -24,7 +24,8 @@ realpath. Keep `scrills/scripts/scrills` and `scrills/SKILL.md` in that relation
   reads it before anything relaunches onto the venv. Check with
   `python3 -c "import ast; ast.parse(open('scrills/scripts/scrills').read(), feature_version=(3,9))"`.
 - **Docstrings are the product.** A scrill's module and function docstrings are its manual —
-  `help()` renders them, `scrills list` parses them. Never strip a docstring anywhere under
+  `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` may carry
+  the manual instead, and wins when both declare frontmatter). Never strip a docstring anywhere under
   `examples/.scrills/` or in a scrill you write. Elsewhere, prefer clear names over comments;
   the CLI keeps its explanation in one block at the top of the file and none below it.
 - **The version lives once**, in `scrills/SKILL.md` frontmatter under `metadata.version`. The CLI
@@ -35,17 +36,17 @@ realpath. Keep `scrills/scripts/scrills` and `scrills/SKILL.md` in that relation
 - **`.scrills/` folders are live code**, not fixtures. `examples/.scrills/` is a real project
   layer; `tests/fixtures/ide/` exists to prove editors and linters stay out of it.
 
-## Scrills are not skills, in two deliberate ways
+## Scrills are not skills, in one deliberate way
 
-A scrill's docstring frontmatter looks like a SKILL.md and differs on purpose:
+A scrill's manual — docstring frontmatter, or a `SKILL.md` beside `__init__.py` — looks like a
+SKILL.md and differs on purpose: the name is a **Python identifier**, so `_` where a skill name
+would have `-` (the folder name is the import name, and an identifier can't hold a hyphen).
+`version` may sit top-level or under `metadata:` as the spec nests it — both are read.
 
-- the name is a **Python identifier**, so `_` where a skill name would have `-` (the folder name
-  is the import name, and an identifier can't hold a hyphen);
-- `version` stays **top-level** in a scrill docstring, not under `metadata`.
-
-No skill tooling ever reads a scrill docstring, so neither costs anything. Anything that exports a
-scrill as a skill maps `_` → `-` at that boundary. Don't "fix" scrill docstrings to match the
-skills spec — only `scrills/SKILL.md` follows it, because only that file is a skill.
+A scrill's manual is never validated as a skill — a skill folder becomes a scrill by adding
+`__init__.py`, and anything that exports a scrill as a skill maps `_` → `-` at that boundary.
+Don't "fix" scrill names to match the skills spec — only `scrills/SKILL.md` must validate,
+because only that file is claimed as a skill.
 
 ## Tests
 
@@ -53,7 +54,7 @@ skills spec — only `scrills/SKILL.md` follows it, because only that file is a 
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **100 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **106 passed**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
 spend money or make noise.**
