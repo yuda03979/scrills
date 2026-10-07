@@ -148,6 +148,8 @@ Failures say why: an uncaught exception records its type and where it broke (nev
 
 A run that never finished — killed, crashed, power loss — surfaces as `died` the first time anything looks. That makes unattended scrills honest: schedule a one-shot scrill from cron or launchd — `echo app.log | scrills run report` — and `ps` tells you whether it actually ran, and how it ended.
 
+This is also the shape work takes when it must outlive the session that started it: a detached process the scheduler owns. A timer inside an agent session dies with the session, and so does a scheduler scoped to it — the job runs, silently, nowhere.
+
 One macOS constraint for scheduled work: launchd and cron jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — the same command that works in your terminal dies with EPERM. Keep the scrills clone outside those folders; the one-line installer's default (`~/.local/share/scrills`) already is. And a scheduled job's working directory decides its project layer: cron starts you in `$HOME`, launchd in `/` — a scheduled *project* scrill needs the job to `cd` into the project first (or launchd's `WorkingDirectory`), or it resolves the user layer only and `run` fails with *no scrill named …* in the job's log.
 
 Attribution is one optional convention: export `SCRILLS_WHO=<something>:<something>` (a cron line, a harness) and runs carry the label.

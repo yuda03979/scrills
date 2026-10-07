@@ -1,21 +1,21 @@
 ---
 name: scrills
-description: Skills you import instead of read. A library of Python capability, layered per project and per user, driven from bash. Before reaching for any other tool or writing any script, check `scrills list` - a scrill may already cover the task; then use it for the work, for computation beyond a one-liner, and for finished work with clear inputs.
+description: Python capability library you call from bash - a scrill is script + skill. Do not use scrills until you have read this skill. Before any other tool or new script, run `scrills list` - a scrill may already cover the task; use it for the work, for computation beyond a one-liner, and for finished work with clear inputs; save reusable logic as a scrill.
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.17"
+  version: "0.2.18"
 ---
 
 # scrills
 
 Skills are knowledge you read; scrills are capability you call. A scrill is a Python module that carries its own SKILL.md — beside its code, or as its head docstring in the one-file shape: one folder holding both. The command is `scrills`.
 
-Check the library before writing logic: `scrills list` prints the library the way a harness lists skills — one `- name: description` line per scrill — and raises anything wrong beneath an entry (a drifted manual, a shadowed name).
+**Read this skill before your first `scrills py` or `scrills run`.** A hook may have injected `scrills list` output into your context — that is inventory, not instructions. Don't guess the CLI's shape either: `scrills py` takes its code on stdin and rejects arguments.
 
 The working loop:
 
-1. `scrills list` — see what exists.
+1. `scrills list` — see what exists: one `- name: description` line per scrill, the way a harness lists skills, with anything wrong raised beneath an entry (a drifted manual, a shadowed name). It parses files and runs nothing.
 2. Pick the matching scrill by its description.
 3. Before first use, read its `__init__.py` — it lives at the project's `.scrills/<name>/` or at `~/.scrills/<name>/`; `scrills where` prints both layer roots.
 4. Use it: import it from `scrills py`, or `scrills run <name>` when it's a program.
@@ -47,13 +47,13 @@ The description says when to use a scrill; `help()` says how. But `help()` rende
 
 Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
-A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs. Being a program, it also slots straight into cron or launchd — one-shot checks, scheduled work. Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry. On macOS, scheduled jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — keep the scrills clone outside them; the piped installer's default (`~/.local/share/scrills`) already is.
-
-Some integrations run the venv python directly, skipping the CLI — a harness hook that fires every prompt, say, where a run record each time would be noise. Bare venv python sees only the user layer: the resolver takes its layer list from `$SCRILLS_LAYERS` (pathsep-joined directories, project first) and falls back to the user library when it's unset. We hit this; the fix is to hand the interpreter its layers where the hook fires — hooks run in the project directory: `SCRILLS_LAYERS="$PWD/.scrills:$HOME/.scrills" "$HOME/.scrills/.venv/bin/python" -I -c '…'`. That is today's mechanism, not a promise — if the resolver's input ever changes, this paragraph changes with it, so re-check it when the manual's version moves.
+A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs — and, under a scheduler, for work that must outlive the session (Scheduled work, below).
 
 Input reaches a scrill four ways: function arguments when imported — the main way; argv and stdin when run as a program (`echo data | scrills run it a b`); environment variables inherited from the caller (secrets travel this way, read at call time); and files, relative to your working directory. The catch: `scrills py`'s stdin already carries the code, so there is none left for data. Pass big data as a file path, never pasted into the snippet; `some-command | scrills py` feeds that output to the compiler — write it to a file first, run the command from inside the Python, or use `scrills run`, which does take stdin.
 
 ## Runs are recorded
+
+The shape of a run, start to finish: `py`/`run` registers it and takes a kernel lock held for its lifetime → importing the scrill runs its top-level code → `main()` returns the exit code, or an outcome named in `EXITS` → the record is finalized on exit → `scrills ps` shows it.
 
 Every `py` and `run` leaves a metadata record — verb, name, a unique run id, pid, cwd, timing, exit, who, and which scrills it imported with their versions — never code, arguments, or output. Failures say why: an uncaught exception records its type and where it broke (`error_type`, `error_at` — for a syntax error, where the compiler found it), never its message. A run scrill can name the exits its `main()` chooses — `EXITS = {1: "no answer"}` beside it — and such a run is recorded as an `outcome` carrying that name instead of an `error`. When `TRACEPARENT` is in the environment the run joins that trace and sets its own id for everything it starts, so cron → subagent → a nested `scrills py` reads as one chain; unset, each run starts its own. `scrills ps` is the one place to look: what's running now (held exact by a kernel lock each run keeps for its life), what died (a run that never finished — killed, crashed, power loss — surfaces the first time anything looks), and a summary of the last 24 hours. History is plain JSONL at `~/.scrills/.runs/log.jsonl`, size-capped, inspectable like any file; recording failures never break a run.
 
@@ -128,6 +128,16 @@ Third-party needs may be declared, PEP 723 style, above the docstring:
 ```
 
 Declarative only — readers and `uv` tooling understand it; scrills installs nothing from it.
+
+## Scheduled work
+
+A program scrill slots straight into cron or launchd — one-shot checks, scheduled work. Work that must outlive the session needs exactly that: a timer inside a session dies with the session, and a session-scoped scheduler goes with it.
+
+Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry. A scheduled job's cwd decides its project layer: cron starts in `$HOME`, launchd in `/`, so a job that needs project scrills must `cd` in first — otherwise only the user layer resolves and the import fails plainly, not through the lost-project notice, which needs inherited layers a scheduler doesn't have. On macOS, scheduled jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — keep the scrills clone outside them; the piped installer's default (`~/.local/share/scrills`) already is.
+
+## Bare python
+
+Some integrations run the venv python directly, skipping the CLI — a harness hook that fires every prompt, say, where a run record each time would be noise. Bare venv python sees only the user layer: the resolver takes its layer list from `$SCRILLS_LAYERS` (pathsep-joined directories, project first) and falls back to the user library when it's unset. We hit this; the fix is to hand the interpreter its layers where the hook fires — hooks run in the project directory: `SCRILLS_LAYERS="$PWD/.scrills:$HOME/.scrills" "$HOME/.scrills/.venv/bin/python" -I -c '…'`. That is today's mechanism, not a promise — if the resolver's input ever changes, this paragraph changes with it, so re-check it when the manual's version moves.
 
 ## IDE and linters
 
