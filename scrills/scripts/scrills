@@ -58,11 +58,14 @@
 # the run launches never hold it - only pure forks do) and the kernel drops it on any death, so a
 # sweep probes the lock, not the pid: lock free = the run died uncleanly, turned into a `died` log
 # line - crash visibility with no supervisor, no recycled-pid ghosts (kill(pid, 0) remains only
-# as the fallback where flock is unsupported). The outcome line is written from an atexit hook,
+# as the fallback where flock is unsupported). Sweeps run serialized under a flock, a death is
+# appended only when its run id isn't already in the log, and a card is removed only after its
+# record lands - a death is recorded exactly once; a card that can't be read or recorded is kept
+# and named. The outcome line is written from an atexit hook,
 # after non-daemon threads joined, so `ok` means actually finished - and only by the process
 # that booted: a forked child inherits the hook but never finalizes the parent's record. `who` comes from
 # $SCRILLS_WHO when set (harness extensions and cron lines label themselves; the core sniffs no
-# vendor variables), else tty/detached. `ps` shows running, newly-found-dead, and the last 24h;
+# vendor variables), else tty/unknown. `ps` shows running, newly-found-dead, and the last 24h;
 # the log rotates once past 1 MiB, under a non-blocking flock so racing finishers never rotate
 # twice. Registry writes never break a run - any failure degrades to a no-op.
 #
@@ -296,6 +299,8 @@ except SystemExit as stop:
         print(stop.code, file=sys.stderr)
         status = 1
 except BaseException as error:
+    if isinstance(error, KeyboardInterrupt):
+        raise
     _note_error(error)
     tb = error.__traceback__
     while tb is not None and _plumbing(tb.tb_frame.f_code.co_filename):
@@ -353,6 +358,8 @@ except SystemExit as stop:
         print(stop.code, file=sys.stderr)
         code = 1
 except BaseException as error:
+    if isinstance(error, KeyboardInterrupt):
+        raise
     _note_error(error)
     traceback.print_exc()
     code = 1
@@ -672,9 +679,9 @@ def who():
     if explicit:
         return explicit
     try:
-        return "tty" if sys.stderr.isatty() else "detached"
+        return "tty" if sys.stderr.isatty() else "unknown"
     except (AttributeError, OSError, ValueError):
-        return "detached"
+        return "unknown"
 
 
 def lineage():
@@ -722,8 +729,28 @@ def append_log(home, record):
             handle.write(json.dumps(record) + "\n")
         finally:
             handle.close()
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def sweep_lock(home):
+    try:
+        directory = runs_dir(home)
+        os.makedirs(directory, exist_ok=True)
+        fd = os.open(os.path.join(directory, "sweep.lock"), os.O_RDWR | os.O_CREAT, 0o644)
     except OSError:
-        pass
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def recorded_ids(home):
+    return {record["id"] for record in log_records(home) if isinstance(record.get("id"), str) and record["id"]}
 
 
 def load_card(path):
@@ -748,9 +775,17 @@ def register(home, verb, name, layer, pid, run_id, trace, parent):
         os.makedirs(directory, exist_ok=True)
         write_ignore(directory)
         path = card_path(home, pid)
-        stale = load_card(path) if os.path.exists(path) else None
-        if stale is not None:
-            append_log(home, {**stale, "status": "died", "pruned": now_iso()})
+        if os.path.exists(path):
+            lock = sweep_lock(home)
+            try:
+                stale = load_card(path)
+                if stale is not None:
+                    stale_id = stale.get("id")
+                    if not (isinstance(stale_id, str) and stale_id and stale_id in recorded_ids(home)):
+                        append_log(home, {**stale, "status": "died", "pruned": now_iso()})
+            finally:
+                if lock is not None:
+                    os.close(lock)
         tmp = path + ".tmp"
         fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
         locked = None
@@ -789,35 +824,52 @@ def held(path, pid):
 
 
 def sweep(home):
-    running, died = [], []
+    running, recorded, unrecorded = [], [], []
     directory = runs_dir(home)
     try:
         names = sorted(os.listdir(directory))
     except OSError:
-        return running, died
-    for filename in names:
-        stem, extension = os.path.splitext(filename)
-        if extension != ".json" or not stem.isdigit():
-            continue
-        path = os.path.join(directory, filename)
-        card = load_card(path)
-        if card is None:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-            continue
-        pid = card["pid"] if isinstance(card.get("pid"), int) else int(stem)
-        if held(path, pid):
-            running.append(card)
-        else:
-            append_log(home, {**card, "status": "died", "pruned": now_iso()})
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-            died.append(card)
-    return running, died
+        return running, recorded, unrecorded
+    if not any(name.endswith(".json") and name[:-5].isdigit() for name in names):
+        return running, recorded, unrecorded
+    lock = sweep_lock(home)
+    try:
+        known = None
+        for filename in names:
+            stem, extension = os.path.splitext(filename)
+            if extension != ".json" or not stem.isdigit():
+                continue
+            path = os.path.join(directory, filename)
+            card = load_card(path)
+            if card is None:
+                if os.path.exists(path):
+                    print(f"scrills ps: cannot read {path} (left in place)", file=sys.stderr)
+                continue
+            pid = card["pid"] if isinstance(card.get("pid"), int) else int(stem)
+            if held(path, pid):
+                running.append(card)
+                continue
+            if known is None:
+                known = recorded_ids(home)
+            ident = card.get("id")
+            if isinstance(ident, str) and ident and ident in known:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            if append_log(home, {**card, "status": "died", "pruned": now_iso()}):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                recorded.append(card)
+            else:
+                unrecorded.append(card)
+    finally:
+        if lock is not None:
+            os.close(lock)
+    return running, recorded, unrecorded
 
 
 def ensure_venv(home):
@@ -1097,7 +1149,7 @@ def within_day(record):
 
 def cmd_ps():
     home, _, _ = layers()
-    running, died = sweep(home)
+    running, died, unrecorded = sweep(home)
     lines = []
     if running:
         lines.append("running:")
@@ -1111,6 +1163,13 @@ def cmd_ps():
     if died:
         lines.append("died (found now, recorded):")
         for card in died:
+            lines.append(
+                f"  {card.get('name', '?')}  pid {card.get('pid', '?')}  started {clock(card.get('started'))}"
+                f"  {tilde(card.get('cwd', '?'))}"
+            )
+    if unrecorded:
+        lines.append("died (found now, could not record - card kept, will retry):")
+        for card in unrecorded:
             lines.append(
                 f"  {card.get('name', '?')}  pid {card.get('pid', '?')}  started {clock(card.get('started'))}"
                 f"  {tilde(card.get('cwd', '?'))}"

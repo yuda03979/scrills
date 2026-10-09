@@ -993,6 +993,208 @@ def test_killed_run_is_not_kept_running_by_a_shell_child(home, project):
                 pass
 
 
+def test_concurrent_ps_records_each_death_once(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    ids = set()
+    for i in range(400):
+        pid = 9000000 + i
+        ident = f"{i:016x}"
+        ids.add(ident)
+        card = {
+            "verb": "run",
+            "name": f"ghost{i}",
+            "id": ident,
+            "pid": pid,
+            "cwd": str(project),
+            "who": "test",
+            "started": "2026-10-09T00:00:00+00:00",
+        }
+        (runs / f"{pid}.json").write_text(json.dumps(card))
+    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    children = [
+        subprocess.Popen(
+            [sys.executable, CLI, "ps"],
+            env=env,
+            cwd=str(project),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(16)
+    ]
+    for child in children:
+        assert child.wait() == 0
+    records = [json.loads(line) for line in (runs / "log.jsonl").read_text().splitlines()]
+    died = [record for record in records if record.get("id") in ids and record.get("status") == "died"]
+    assert len(died) == 400
+    assert len({record["id"] for record in died}) == 400
+    assert not [path for path in runs.glob("*.json") if path.stem.isdigit() and 9000000 <= int(path.stem) < 9000400]
+
+
+def test_ps_does_not_rerecord_a_finished_run(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    ident = "cafecafecafecafe"
+    started = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    with (runs / "log.jsonl").open("a") as handle:
+        handle.write(
+            json.dumps({"verb": "run", "name": "alreadydone", "id": ident, "pid": 9876540, "status": "ok", "exit": 0, "started": started}) + "\n"
+        )
+    card = {"verb": "run", "name": "alreadydone", "id": ident, "pid": 9876540, "cwd": str(project), "who": "test", "started": started}
+    (runs / "9876540.json").write_text(json.dumps(card))
+    result = scrills(["ps"], home, project)
+    assert result.returncode == 0
+    assert [record["status"] for record in log_records(home, "alreadydone")] == ["ok"]
+    assert not (runs / "9876540.json").exists()
+
+
+def test_ps_keeps_the_card_when_the_append_fails(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    log = runs / "log.jsonl"
+    aside = runs / "log.jsonl.aside"
+    if log.exists():
+        os.rename(log, aside)
+    log.mkdir()
+    card = {
+        "verb": "run",
+        "name": "unrecordable",
+        "id": "deadbeefdeadbeef",
+        "pid": 9876541,
+        "cwd": str(project),
+        "who": "test",
+        "started": "2026-10-09T00:00:00+00:00",
+    }
+    card_path = runs / "9876541.json"
+    card_path.write_text(json.dumps(card))
+    try:
+        result = scrills(["ps"], home, project)
+        assert result.returncode == 0
+        assert card_path.exists()
+        assert "could not record" in result.stdout
+        assert "found now, recorded" not in result.stdout
+    finally:
+        log.rmdir()
+        if aside.exists():
+            os.rename(aside, log)
+    result = scrills(["ps"], home, project)
+    assert result.returncode == 0
+    assert not card_path.exists()
+    assert [record["status"] for record in log_records(home, "unrecordable")] == ["died"]
+
+
+def test_ps_keeps_and_names_an_unreadable_card(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    bad = runs / "9876542.json"
+    bad.write_text("{not json")
+    try:
+        result = scrills(["ps"], home, project)
+        assert result.returncode == 0
+        assert bad.exists()
+        assert "9876542.json" in result.stderr
+        records = [json.loads(line) for line in (runs / "log.jsonl").read_text().splitlines()]
+        assert not [record for record in records if record.get("pid") == 9876542]
+    finally:
+        bad.unlink(missing_ok=True)
+
+
+def test_py_records_unknown_who_when_not_a_tty(home, project):
+    result = scrills(["py"], home, project, stdin="1")
+    assert result.returncode == 0
+    assert log_records(home, "py")[-1]["who"] == "unknown"
+
+
+def test_py_records_tty_who_on_a_terminal(home, project):
+    import pty
+
+    master, slave = pty.openpty()
+    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    child = subprocess.Popen(
+        [sys.executable, CLI, "py"],
+        env=env,
+        cwd=str(project),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=slave,
+        text=True,
+    )
+    os.close(slave)
+    child.stdin.write("1")
+    child.stdin.close()
+    child.stdin = None
+    assert child.wait(timeout=30) == 0
+    os.close(master)
+    assert log_records(home, "py")[-1]["who"] == "tty"
+
+
+def test_py_sigint_dies_naturally(home, project):
+    ready = project / "sigint-ready"
+    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    child = subprocess.Popen(
+        [sys.executable, CLI, "py"],
+        env=env,
+        cwd=str(project),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child.stdin.write(f"import pathlib, time\npathlib.Path({str(ready)!r}).write_text('1')\ntime.sleep(30)\n")
+    child.stdin.close()
+    child.stdin = None
+    deadline = time.monotonic() + 10
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists()
+    card = Path(home) / ".runs" / f"{child.pid}.json"
+    assert card.exists()
+    before = len(log_records(home, "py"))
+    os.kill(child.pid, signal.SIGINT)
+    assert child.wait(timeout=10) == -signal.SIGINT
+    assert child.stderr.read().count("KeyboardInterrupt") == 1
+    assert len(log_records(home, "py")) == before
+    assert card.exists()
+    scrills(["ps"], home, project)
+    record = log_records(home, "py")[-1]
+    assert record["status"] == "died"
+    assert record["pid"] == child.pid
+    assert not card.exists()
+
+
+def test_run_sigint_dies_naturally(home, project):
+    ready = project / "sigint-ready"
+    write_scrill(
+        project / ".scrills",
+        "sigintable",
+        "sigintable",
+        f"import pathlib, time\ndef main():\n    pathlib.Path({str(ready)!r}).write_text('1')\n    time.sleep(30)\n    return 0",
+    )
+    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    child = subprocess.Popen(
+        [sys.executable, CLI, "run", "sigintable"],
+        env=env,
+        cwd=str(project),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    card = Path(home) / ".runs" / f"{child.pid}.json"
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists()
+    assert card.exists()
+    os.kill(child.pid, signal.SIGINT)
+    assert child.wait(timeout=10) == -signal.SIGINT
+    assert child.stderr.read().count("KeyboardInterrupt") == 1
+    assert card.exists()
+    scrills(["ps"], home, project)
+    record = log_records(home, "sigintable")[-1]
+    assert record["status"] == "died"
+    assert not card.exists()
+
+
 def test_forked_child_does_not_finalize_the_record(home, project):
     before = len(log_records(home, "py"))
     snippet = textwrap.dedent(

@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.18"
+  version: "0.2.19"
 ---
 
 # scrills
@@ -57,7 +57,7 @@ The shape of a run, start to finish: `py`/`run` registers it and takes a kernel 
 
 Every `py` and `run` leaves a metadata record — verb, name, a unique run id, pid, cwd, timing, exit, who, and which scrills it imported with their versions — never code, arguments, or output. Failures say why: an uncaught exception records its type and where it broke (`error_type`, `error_at` — for a syntax error, where the compiler found it), never its message. A run scrill can name the exits its `main()` chooses — `EXITS = {1: "no answer"}` beside it — and such a run is recorded as an `outcome` carrying that name instead of an `error`. When `TRACEPARENT` is in the environment the run joins that trace and sets its own id for everything it starts, so cron → subagent → a nested `scrills py` reads as one chain; unset, each run starts its own. `scrills ps` is the one place to look: what's running now (held exact by a kernel lock each run keeps for its life), what died (a run that never finished — killed, crashed, power loss — surfaces the first time anything looks), and a summary of the last 24 hours. History is plain JSONL at `~/.scrills/.runs/log.jsonl`, size-capped, inspectable like any file; recording failures never break a run.
 
-Attribution is one convention: export `SCRILLS_WHO=<harness>:<session>` (a harness extension, a cron line) and runs carry it; unset, they record `tty` or `detached`.
+Attribution is one convention: export `SCRILLS_WHO=<harness>:<session>` (a harness extension, a cron line) and runs carry it; unset, they record `tty` or `unknown`.
 
 ## Writing a scrill
 
@@ -128,6 +128,10 @@ Third-party needs may be declared, PEP 723 style, above the docstring:
 ```
 
 Declarative only — readers and `uv` tooling understand it; scrills installs nothing from it.
+
+## A run's lifetime
+
+A scrill run is an ordinary process: the command *is* the run — no wrapper, daemon, or supervisor — so its lifetime belongs to whatever started it. In a terminal it ends when you interrupt it; under an agent it lives in the harness's process tree, and what the harness does at session end is the harness's business; under cron or launchd it runs on the scheduler's clock, independent of any session. Scrills never kills, detaches, or supervises a run — it only records it. Work that must outlive its starter needs a starter that outlives the session (Scheduled work, below). A child a run spawns in the background is a plain process of its own: the run ends, the child continues, and scrills doesn't track it unless the scrill does.
 
 ## Scheduled work
 
