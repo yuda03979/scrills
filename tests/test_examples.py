@@ -32,8 +32,12 @@ def test_list_shows_the_example_layer(home):
     assert "- harness_config: Use to point Claude Code or Pi at scrills." in result.stdout
     assert "scrills run harness_config" in result.stdout
     assert "runs standalone" not in result.stdout
-    assert "(no " not in result.stdout
-    assert "differs from folder" not in result.stdout
+    # scope the notice assertions to harness_config's own chunk: the session home accumulates
+    # scrills from other tests, and whole-stdout asserts false-trip on them (the task-20 lesson).
+    chunk = result.stdout.split("- harness_config: Use to point Claude Code or Pi at scrills.", 1)[1]
+    chunk = chunk.split("\n- ", 1)[0]
+    assert "(no " not in chunk
+    assert "differs from folder" not in chunk
 
 
 def claude_home(tmp_path, settings=None):
@@ -242,3 +246,55 @@ def test_harness_config_undo_removes_only_our_hook(home, tmp_path):
     result = scrills(["run", "harness_config", "undo"], home, extra_env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert session_start(fake) == [BUS_HOOK]
+
+
+def test_hook_command_works_from_a_path_with_spaces(home, tmp_path):
+    import shlex
+    import shutil
+
+    spaced = tmp_path / "clone with space" / "scrills"
+    shutil.copytree(SKILL_DIR, spaced)
+    spaced_cli = spaced / "scripts" / "scrills"
+    os.chmod(spaced_cli, 0o755)
+    fake, env = claude_home(tmp_path)
+    env = {**env, "SCRILLS_HOME": str(home)}
+    result = subprocess.run(
+        [sys.executable, str(spaced_cli), "run", "harness_config", "apply", "--hook"],
+        env={**base_env(), **env},
+        cwd=str(EXAMPLES),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    command = session_start(fake)[0]["hooks"][0]["command"]
+    assert str(spaced_cli) in command
+    assert shlex.quote(str(spaced_cli)) in command
+    assert shlex.quote(str(spaced_cli)) != str(spaced_cli), "the test path must contain a space to prove quoting"
+    ran = subprocess.run(
+        ["sh", "-c", command],
+        env={**base_env(), **env},
+        cwd=str(EXAMPLES),
+        capture_output=True,
+        text=True,
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert "harness_config" in ran.stdout
+
+
+def test_own_version_survives_a_missing_module(tmp_path):
+    import importlib.util
+
+    claude_path = Path(__file__).resolve().parent.parent / "examples" / ".scrills" / "harness_config" / "harness" / "_claude.py"
+    spec = importlib.util.spec_from_file_location("claude_direct", claude_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert "scrills.harness_config" not in sys.modules
+    assert module.own_version() == "0"
+    import types
+
+    stub = types.ModuleType("scrills.harness_config")  # present in sys.modules but docstring-less
+    sys.modules["scrills.harness_config"] = stub
+    try:
+        assert module.own_version() == "0"
+    finally:
+        del sys.modules["scrills.harness_config"]

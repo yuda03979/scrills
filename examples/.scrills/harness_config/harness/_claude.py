@@ -4,6 +4,7 @@ else: no env vars, no model settings. settings.json is merged, never replaced: o
 through untouched; a file that does not parse is refused."""
 import json
 import os
+import shlex
 import shutil
 import sys
 
@@ -78,8 +79,10 @@ def allow_list(settings):
 
 def own_version():
     module = sys.modules.get("scrills.harness_config")
-    lines = ((getattr(module, "__doc__", None) or "").strip().splitlines() + ["---"])[1:]
-    for line in lines[: lines.index("---")]:
+    doc = (getattr(module, "__doc__", None) or "").strip().splitlines()
+    for line in doc[1:]:
+        if line.strip() == "---":
+            break
         if line.strip().startswith("version:"):
             return line.split(":", 1)[1].strip()
     return "0"
@@ -96,7 +99,7 @@ def hook_command():
     return (
         f"{HOOK_MARKER}{own_version()} "
         "echo 'the scrills library - check it before writing logic; use from bash: scrills py' "
-        f"&& {cli_path()} list 2>/dev/null"
+        f"&& {shlex.quote(cli_path())} list 2>/dev/null"
     )
 
 

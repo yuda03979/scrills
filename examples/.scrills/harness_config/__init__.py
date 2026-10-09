@@ -2,7 +2,7 @@
 ---
 name: harness_config
 description: Use to point Claude Code or Pi at scrills. Checks and writes only the harness-side wiring needed to discover the manual; Claude Code can also receive an opt-in ambient library listing. Run: scrills run harness_config [status|apply [--hook]|undo] [claude|pi]; nothing changes unless apply is called.
-version: 0.1.3
+version: 0.1.4
 ---
 
 status(harness="claude") -> the harness, whether its config root was found, the skill-link

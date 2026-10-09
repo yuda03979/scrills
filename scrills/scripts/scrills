@@ -9,11 +9,14 @@
 # .scrills walking up from the cwd (never the user library, never the default ~/.scrills even
 # when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
 # aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
-# also hosts the generated .venv. A folder whose name starts with '_' is an invisible draft; a
-# folder whose name is not a valid identifier is ignored. A project scrill shadowing a different
-# user scrill is process-wide - other scrills' imports get the project one - so py and run say
-# so in one stderr line. A stray <name>.py at a layer root resolves the same way (a scrill
-# folder beats it within its own layer), joins that notice, and list points at it.
+# also hosts the generated .venv. A folder whose name starts with '_' is an invisible draft.
+# A folder that can never resolve as a scrill - a name that is not a valid identifier, or a
+# missing or dangling __init__.py, which Python would otherwise import as an empty namespace
+# package - is named with its reason by list and by run's refusal, never silently skipped. A
+# project scrill shadowing a different user scrill is process-wide - other scrills' imports get
+# the project one - so py and run say so in one stderr line. A stray <name>.py at a layer root
+# resolves the same way (a scrill folder beats it within its own layer), joins that notice, and
+# list points at it.
 #
 # The venv is the runtime; this CLI is a thin dispatcher. The resolver lives inside the venv
 # (site-packages/_scrills_pth.py + scrills.pth, rewritten atomically whenever this file's copy
@@ -69,8 +72,13 @@
 # the log rotates once past 1 MiB, under a non-blocking flock so racing finishers never rotate
 # twice. Registry writes never break a run - any failure degrades to a no-op.
 #
-# Exit codes: 0 ok; 1 an exception in scrill or py code; 2 usage, unknown scrill, or not
-# runnable; install exits with pip's code.
+# When a run dies on a missing scrill or third-party package, the boot appends one stderr line
+# to the traceback - the names that exist, or `scrills install <pkg>`: raised louder, never
+# resolved.
+#
+# Exit codes: 0 ok; a run's own choice passes through (run: main()'s int, wrapped to 0..255 as
+# the OS wraps it; py: a SystemExit's code the same way); 1 an exception in scrill or py code;
+# 2 usage, unknown scrill, or not runnable; install exits with pip's code.
 import ast
 import datetime
 import fcntl
@@ -79,7 +87,6 @@ import json
 import keyword
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -140,6 +147,7 @@ LOCK_FD = {lock_fd!r}
 LOG = {log!r}
 PREV = {prev!r}
 STARTED = {started!r}
+KNOWN = {known!r}
 BOOT_PID = os.getpid()
 OUTCOME = {{}}
 try:
@@ -151,10 +159,43 @@ if LOCK_FD is not None:
         os.set_inheritable(LOCK_FD, False)
     except OSError:
         pass
+LAYER_DIRS = [path for path in os.environ.get('SCRILLS_LAYERS', '').split(os.pathsep) if path]
+def _plumbing(filename):
+    if filename.startswith('<'):
+        return filename != '<py>'
+    if any(filename.startswith(layer + os.sep) for layer in LAYER_DIRS):
+        return False
+    return (os.sep + 'asyncio' + os.sep) in filename or (os.sep + 'importlib' + os.sep + '__init__.py') in filename
+def _explain_import_error(error):
+    try:
+        missing = getattr(error, 'name', None) or ''
+        if isinstance(error, ModuleNotFoundError):
+            if missing.startswith('scrills.'):
+                parts = missing.split('.')
+                if len(parts) > 1 and parts[1] and parts[1] not in KNOWN:
+                    return 'scrills: no scrill named ' + parts[1] + ' (available: ' + (', '.join(KNOWN) or 'none yet') + ')'
+                return None
+            if missing and not missing.startswith('.'):
+                top = missing.split('.')[0]
+                if top != 'scrills' and top not in KNOWN:
+                    return "scrills: no module named '" + missing + "' - if it is a third-party package, install it with: scrills install " + top
+            return None
+        if isinstance(error, ImportError) and missing == 'scrills':
+            text = str(error)
+            marker = "cannot import name '"
+            if marker not in text:
+                return None
+            name = text.split(marker, 1)[1].split("'")[0]
+            if name in KNOWN:
+                return None
+            return 'scrills: no scrill named ' + name + ' (available: ' + (', '.join(KNOWN) or 'none yet') + ')'
+    except Exception:
+        pass
+    return None
 def _note_error(error):
     try:
         OUTCOME['error_type'] = type(error).__name__
-        layer_dirs = [path for path in os.environ.get('SCRILLS_LAYERS', '').split(os.pathsep) if path]
+        layer_dirs = LAYER_DIRS
         def ours(filename):
             return filename == '<py>' or any(filename.startswith(layer + os.sep) for layer in layer_dirs)
         spot = None
@@ -269,8 +310,6 @@ def _run(codeobj):
             asyncio.set_event_loop(loop)
         return loop.run_until_complete(value)
     return value
-def _plumbing(filename):
-    return filename == '<string>' or (os.sep + 'asyncio' + os.sep) in filename
 def _echo(value):
     text = repr(value)
     if ECHO_CAP > 0 and len(text) > ECHO_CAP:
@@ -307,6 +346,9 @@ except BaseException as error:
         tb = tb.tb_next
     sys.stdout.flush()
     sys.stderr.write(''.join(traceback.format_exception(type(error), error, tb)))
+    hint = _explain_import_error(error)
+    if hint:
+        sys.stderr.write(hint + '\\n')
     status = 1
 finally:
     if loop is not None:
@@ -361,7 +403,14 @@ except BaseException as error:
     if isinstance(error, KeyboardInterrupt):
         raise
     _note_error(error)
-    traceback.print_exc()
+    tb = error.__traceback__
+    while tb is not None and _plumbing(tb.tb_frame.f_code.co_filename):
+        tb = tb.tb_next
+    sys.stdout.flush()
+    sys.stderr.write(''.join(traceback.format_exception(type(error), error, tb)))
+    hint = _explain_import_error(error)
+    if hint:
+        sys.stderr.write(hint + '\\n')
     code = 1
 if chosen and code != 0:
     try:
@@ -487,6 +536,42 @@ def stray_scan(directory):
         if extension == ".py" and not filename.startswith(("_", ".")) and stem.isidentifier():
             found[stem] = os.path.join(directory, filename)
     return found
+
+
+def ignored_entries(directory):
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        if name.startswith(("_", ".")):
+            continue
+        entry = os.path.join(directory, name)
+        if not os.path.isdir(entry):
+            continue
+        init = os.path.join(entry, "__init__.py")
+        if not name.isidentifier():
+            if os.path.lexists(init) or os.path.isfile(os.path.join(entry, "SKILL.md")):
+                found.append((name, "not a valid Python identifier - the folder name is the import name; rename it, e.g. - to _"))
+            continue
+        if os.path.isfile(init):
+            continue
+        if os.path.lexists(init):
+            found.append((name, "__init__.py is a dangling symlink or not a file"))
+        elif os.path.isfile(os.path.join(entry, "SKILL.md")):
+            found.append((name, "a skill folder - add __init__.py to make it a scrill (today it imports as an empty namespace package)"))
+        elif any(item.endswith(".py") for item in os.listdir(entry)):
+            found.append((name, "no __init__.py - __init__.py is always the entry (today it imports as an empty namespace package)"))
+    return found
+
+
+def known_names(found_layers):
+    known = {}
+    for _, directory in found_layers:
+        for name in providers(directory):
+            known.setdefault(name, name)
+    return sorted(known)
 
 
 def providers(directory):
@@ -882,8 +967,11 @@ def ensure_venv(home):
             f"scrills: {python} points at a python that no longer exists (removed or upgraded).\n"
             f"Rebuild the environment: rm -rf {target}  - then rerun, and reinstall any packages (scrills install ...)"
         )
-    os.makedirs(runs_dir(home), exist_ok=True)
-    write_ignore(runs_dir(home))
+    try:
+        os.makedirs(runs_dir(home), exist_ok=True)
+        write_ignore(runs_dir(home))
+    except OSError as error:
+        fail(f"scrills: cannot create {runs_dir(home)}: {error.strerror or error}\nThe user library ({home}) must be a writable directory - fix it, or point SCRILLS_HOME at one")
     with open(os.path.join(runs_dir(home), "venv.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if os.path.exists(python):
@@ -975,7 +1063,7 @@ def child_flags(home):
     return ["-I", "-X", "pycache_prefix=" + os.path.join(home, ".pycache")]
 
 
-def finish_block(home, card, lock_fd, started, run_id, trace, flags):
+def finish_block(home, card, lock_fd, started, run_id, trace, flags, known):
     return FINISH.format(
         card=card,
         card_path=card_path(home, os.getpid()),
@@ -984,6 +1072,7 @@ def finish_block(home, card, lock_fd, started, run_id, trace, flags):
         prev=os.path.join(runs_dir(home), "log.prev.jsonl"),
         started=started,
         traceparent="00-" + trace + "-" + run_id + "-" + flags,
+        known=known,
     )
 
 
@@ -1031,7 +1120,7 @@ def cmd_py(argv):
     run_id = os.urandom(8).hex()
     trace, parent, flags = lineage()
     card, lock_fd = register(home, "py", "py", None, os.getpid(), run_id, trace, parent)
-    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags) + PY_BODY
+    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags, known_names(found)) + PY_BODY
     os.execv(python, [python, *child_flags(home), "-c", boot])
 
 
@@ -1045,6 +1134,14 @@ def cmd_run(argv):
     warn_lost_project(home, found)
     merged, _ = library(found)
     if name not in merged:
+        for _, directory in found:
+            stray = stray_scan(directory).get(name)
+            if stray is not None:
+                fail(f"scrills run: {name} is a stray module - not runnable; import it from py (from scrills import {name}) or fold it into {os.path.join(os.path.dirname(stray), name, '__init__.py')}", 2)
+        for _, directory in found:
+            reason = dict(ignored_entries(directory)).get(name)
+            if reason is not None:
+                fail(f"scrills run: {name} can't run - {reason}", 2)
         available = ", ".join(sorted(merged)) or "none yet"
         fail(f"scrills run: there's no scrill named {name} (available: {available})", 2)
     if binds_main(merged[name]["entry"]) is False:
@@ -1054,7 +1151,7 @@ def cmd_run(argv):
     run_id = os.urandom(8).hex()
     trace, parent, flags = lineage()
     card, lock_fd = register(home, "run", name, merged[name]["layer"], os.getpid(), run_id, trace, parent)
-    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags) + RUN_BODY
+    boot = finish_block(home, card, lock_fd, time.time(), run_id, trace, flags, known_names(found)) + RUN_BODY
     os.execv(python, [python, *child_flags(home), "-c", boot, name, *argv[1:]])
 
 
@@ -1074,16 +1171,21 @@ def stray_modules(found_layers):
     ]
 
 
-def cmd_list():
+def cmd_list(argv):
+    if argv:
+        fail(f"scrills list: unknown argument {argv[0]}\n{USAGE}", 2)
     home, found, foreign = layers()
     warn_foreign(foreign)
     merged, shadowed = library(found)
     strays = stray_modules(found)
+    ignored = [(label, name, reason) for label, directory in found for name, reason in ignored_entries(directory)]
     if not merged:
         where = " or ".join(directory for _, directory in found) or home
         print(f"no scrills yet; the library is {where}")
-        if not strays:
+        if not strays and not ignored:
             return
+    layer_dirs = dict(found)
+    project_strays = {stem for label, directory in found if label == "project" for stem in stray_scan(directory)}
     for name in sorted(merged):
         lines, kind, filed, extra = manifest(merged[name]["entry"])
         print(f"- {name}: {entry_description(lines, kind)}".rstrip())
@@ -1093,13 +1195,23 @@ def cmd_list():
         print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
     for filename, layer, stem in strays:
         beaten = merged.get(stem)
-        if layer == "project" and beaten is not None and beaten["layer"] == "user":
+        if stem in scan(layer_dirs[layer]):
+            print(f"{filename}  ({layer}, stray module - the {stem}/ folder beside it wins; fold it into the folder)")
+        elif layer == "user" and stem in project_strays:
+            print(f"{filename}  (user, stray module - shadowed by the project's {stem}.py; invisible here)")
+        elif layer == "user" and beaten is not None and beaten["layer"] == "project":
+            print(f"{filename}  (user, stray module - shadowed by the project scrill {stem}; invisible here)")
+        elif layer == "project" and beaten is not None and beaten["layer"] == "user":
             print(f"{filename}  (project, stray module - shadows the user scrill {stem}: imports get this file; fold it into a folder)")
         else:
             print(f"{filename}  ({layer}, stray module - importable as scrills.{stem}, invisible here; fold it into a folder)")
+    for label, name, reason in ignored:
+        print(f"{name}  ({label}, ignored - {reason})")
 
 
 def tilde(path):
+    if not isinstance(path, str):
+        return "?"
     homedir = os.path.expanduser("~")
     if path == homedir or path.startswith(homedir + os.sep):
         return "~" + path[len(homedir):]
@@ -1147,7 +1259,9 @@ def within_day(record):
     return (datetime.datetime.now(begin.tzinfo) - begin).total_seconds() <= 86400
 
 
-def cmd_ps():
+def cmd_ps(argv):
+    if argv:
+        fail(f"scrills ps: unknown argument {argv[0]}\n{USAGE}", 2)
     home, _, _ = layers()
     running, died, unrecorded = sweep(home)
     lines = []
@@ -1211,7 +1325,9 @@ def cmd_ps():
     print("\n".join(lines))
 
 
-def cmd_where():
+def cmd_where(argv):
+    if argv:
+        fail(f"scrills where: unknown argument {argv[0]}\n{USAGE}", 2)
     home, found, foreign = layers()
     project = next((directory for label, directory in found if label == "project"), None)
     python = venv_python(home)
@@ -1252,9 +1368,11 @@ def main():
         sys.exit(0 if argv else 2)
     verb, rest = argv[0], argv[1:]
     if verb == "--version":
+        if rest:
+            fail(f"scrills --version: unknown argument {rest[0]}\n{USAGE}", 2)
         print(version())
     elif verb == "list":
-        cmd_list()
+        cmd_list(rest)
     elif verb == "py":
         cmd_py(rest)
     elif verb == "run":
@@ -1262,9 +1380,9 @@ def main():
     elif verb == "install":
         cmd_install(rest)
     elif verb == "ps":
-        cmd_ps()
+        cmd_ps(rest)
     elif verb == "where":
-        cmd_where()
+        cmd_where(rest)
     else:
         fail(f"scrills: unknown verb {verb}\n{USAGE}", 2)
 

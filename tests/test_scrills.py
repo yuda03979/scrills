@@ -1,5 +1,6 @@
 # Drives the real CLI as a subprocess: a session-scoped user home (one venv build), a fresh
 # project directory per test. Run: uv run --with pytest==8.4.2 python -m pytest tests/ -q
+import ast
 import datetime
 import json
 import os
@@ -1964,3 +1965,184 @@ def test_install_sh_links_the_skill_for_claude_and_pi(tmp_path):
     for link in (claude_skills / "scrills", pi_agent / "skills" / "scrills"):
         assert link.is_symlink()
         assert os.path.realpath(link) == os.path.realpath(SKILL.parent)
+
+
+def test_ps_survives_wrong_shape_records(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    started = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    card = {"verb": "run", "name": "nullghost", "id": "deadbeefdeadbeef", "pid": dead.pid, "cwd": None, "who": "test", "started": started}
+    (runs / f"{dead.pid}.json").write_text(json.dumps(card))
+    with (runs / "log.jsonl").open("a") as handle:
+        handle.write(json.dumps({"verb": "run", "name": "nullcwd", "pid": 1, "cwd": None, "exit": 1, "status": "error", "error_type": "ValueError", "started": started}) + "\n")
+    result = scrills(["ps"], home, project)
+    assert result.returncode == 0, result.stderr
+    assert "nullghost" in result.stdout
+    assert "nullcwd" in result.stdout
+    assert not (runs / f"{dead.pid}.json").exists()
+    again = scrills(["ps"], home, project)
+    assert again.returncode == 0, again.stderr
+
+
+def test_run_traceback_carries_no_plumbing(home, project):
+    write_scrill(project / ".scrills", "raiser", "raiser", "def main():\n    raise ValueError('x')")
+    result = scrills(["run", "raiser"], home, project)
+    assert result.returncode == 1
+    assert "ValueError" in result.stderr
+    assert "in main" in result.stderr
+    assert "<string>" not in result.stderr
+    assert "<frozen" not in result.stderr
+    assert "importlib" not in result.stderr
+    write_scrill(
+        project / ".scrills",
+        "araiser",
+        "araiser",
+        "import asyncio\nasync def main():\n    await asyncio.sleep(0)\n    raise ValueError('x')",
+    )
+    result = scrills(["run", "araiser"], home, project)
+    assert result.returncode == 1
+    assert "ValueError" in result.stderr
+    assert "in main" in result.stderr
+    assert "<string>" not in result.stderr
+    assert "asyncio" not in result.stderr
+    write_scrill(project / ".scrills", "badparse", "badparse", "def main(:\n    pass")
+    result = scrills(["run", "badparse"], home, project)
+    assert result.returncode == 1
+    assert "SyntaxError" in result.stderr
+    assert "__init__.py" in result.stderr
+    assert "<string>" not in result.stderr
+    assert "<frozen" not in result.stderr
+    assert "importlib" not in result.stderr
+
+
+def test_missing_scrill_error_names_the_library(home, project):
+    write_scrill(project / ".scrills", "realone", "realone", "VALUE = 1")
+    result = scrills(["py"], home, project, stdin="from scrills import nope")
+    assert result.returncode == 1
+    assert "ImportError" in result.stderr
+    assert "no scrill named nope" in result.stderr
+    assert "realone" in result.stderr
+    dotted = scrills(["py"], home, project, stdin="import scrills.nope")
+    assert dotted.returncode == 1
+    assert "no scrill named nope" in dotted.stderr
+    submodule = scrills(["py"], home, project, stdin="import scrills.realone.nope")
+    assert submodule.returncode == 1
+    assert "no scrill named" not in submodule.stderr
+
+
+def test_missing_package_error_points_at_install(home, project):
+    result = scrills(["py"], home, project, stdin="import definitely_missing_pkg_xyz")
+    assert result.returncode == 1
+    assert "ModuleNotFoundError" in result.stderr
+    assert "scrills install definitely_missing_pkg_xyz" in result.stderr
+
+
+def test_run_scrill_missing_dependency_gets_the_hint(home, project):
+    write_scrill(project / ".scrills", "needy", "needy", "from scrills import nope\ndef main():\n    return 0")
+    result = scrills(["run", "needy"], home, project)
+    assert result.returncode == 1
+    assert "no scrill named nope" in result.stderr
+
+
+def test_list_raises_folders_that_never_resolve(home, project):
+    layer = project / ".scrills"
+    (layer / "deep-research").mkdir()
+    (layer / "deep-research" / "__init__.py").write_text('\"\"\"x\"\"\"\n')
+    (layer / "skillonly").mkdir()
+    (layer / "skillonly" / "SKILL.md").write_text("---\nname: skillonly\ndescription: d\nversion: 1.0\n---\n")
+    (layer / "entryless").mkdir()
+    (layer / "entryless" / "main.py").write_text("def main():\n    return 0\n")
+    (layer / "dangling").mkdir()
+    (layer / "dangling" / "__init__.py").symlink_to(layer / "dangling" / "gone.py")
+    listing = scrills(["list"], home, project)
+    assert listing.returncode == 0
+    assert "- deep-research:" not in listing.stdout
+    assert "deep-research" in listing.stdout
+    assert "not a valid Python identifier" in listing.stdout
+    assert "skillonly" in listing.stdout
+    assert "skill folder" in listing.stdout
+    assert "entryless" in listing.stdout
+    assert "no __init__.py" in listing.stdout
+    assert "dangling" in listing.stdout
+    assert "dangling symlink" in listing.stdout
+
+
+def test_run_refusal_explains_ignored_folders_and_strays(home, project):
+    layer = project / ".scrills"
+    (layer / "deep-research").mkdir()
+    (layer / "deep-research" / "__init__.py").write_text('\"\"\"x\"\"\"\n')
+    (layer / "skillonly").mkdir()
+    (layer / "skillonly" / "SKILL.md").write_text("---\nname: skillonly\ndescription: d\nversion: 1.0\n---\n")
+    (layer / "straymod.py").write_text("VALUE = 1\n")
+    result = scrills(["run", "deep-research"], home, project)
+    assert result.returncode == 2
+    assert "not a valid Python identifier" in result.stderr
+    result = scrills(["run", "skillonly"], home, project)
+    assert result.returncode == 2
+    assert "skill folder" in result.stderr
+    result = scrills(["run", "straymod"], home, project)
+    assert result.returncode == 2
+    assert "stray module" in result.stderr
+    assert "__init__.py" in result.stderr
+
+
+def test_stray_messages_when_a_folder_wins(home, project):
+    write_scrill(project / ".scrills", "loose", "loose folder", "KIND = 'package'")
+    (project / ".scrills" / "loose.py").write_text("KIND = 'stray'\n")
+    listing = scrills(["list"], home, project)
+    assert "loose.py" in listing.stdout
+    assert "the loose/ folder beside it wins" in listing.stdout
+    assert "importable as scrills.loose" not in listing.stdout
+    write_scrill(project / ".scrills", "wins", "project folder", "KIND = 'project'")
+    (Path(home) / "wins.py").write_text("KIND = 'user stray'\n")
+    listing = scrills(["list"], home, project)
+    assert "wins.py" in listing.stdout
+    assert "shadowed by the project scrill wins" in listing.stdout
+
+
+def test_read_verbs_reject_arguments(home, project):
+    for verb in ("list", "ps", "where"):
+        result = scrills([verb, "--json"], home, project)
+        assert result.returncode == 2, verb
+        assert "unknown argument" in result.stderr, verb
+    result = scrills(["--version", "extra"], home, project)
+    assert result.returncode == 2
+    assert "unknown argument" in result.stderr
+
+
+def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
+    notadir = tmp_path / "notadir"
+    notadir.write_text("x")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    result = scrills(["py"], notadir, proj, stdin="1")
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert str(notadir) in result.stderr
+
+
+def test_boot_templates_parse():
+    tree = ast.parse(Path(CLI).read_text())
+    templates = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ("PTH_MODULE", "FINISH", "PY_BODY", "RUN_BODY"):
+            templates[node.targets[0].id] = node.value.value
+    assert len(templates) == 4
+    ast.parse(templates["PTH_MODULE"])
+    ast.parse(templates["PY_BODY"])
+    ast.parse(templates["RUN_BODY"])
+    boot = templates["FINISH"].format(
+        card={},
+        card_path="/x",
+        lock_fd=None,
+        log="/x/log",
+        prev="/x/prev",
+        started=0.0,
+        traceparent="00-" + "ab" * 16 + "-" + "cd" * 8 + "-01",
+        known=[],
+    )
+    ast.parse(boot)
+    ast.parse(boot + templates["PY_BODY"])
+    ast.parse(boot + templates["RUN_BODY"])

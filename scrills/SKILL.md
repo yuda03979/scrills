@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.19"
+  version: "0.2.20"
 ---
 
 # scrills
@@ -15,9 +15,9 @@ Skills are knowledge you read; scrills are capability you call. A scrill is a Py
 
 The working loop:
 
-1. `scrills list` — see what exists: one `- name: description` line per scrill, the way a harness lists skills, with anything wrong raised beneath an entry (a drifted manual, a shadowed name). It parses files and runs nothing.
+1. `scrills list` — see what exists: one `- name: description` line per scrill, the way a harness lists skills, with anything wrong raised: notices beneath an entry (a drifted manual, a shadowed name) and, at the end, folders that can never resolve (a hyphenated name, a missing `__init__.py`). It parses files and runs nothing.
 2. Pick the matching scrill by its description.
-3. Before first use, read its `__init__.py` — it lives at the project's `.scrills/<name>/` or at `~/.scrills/<name>/`; `scrills where` prints both layer roots.
+3. Before first use, read its `__init__.py` — try the project's `.scrills/<name>/` first (on a name collision the project copy is the one that runs), then `~/.scrills/<name>/`; `scrills where` prints both layer roots.
 4. Use it: import it from `scrills py`, or `scrills run <name>` when it's a program.
 5. When logic proves useful beyond the moment, save it as a scrill (Writing a scrill, below).
 
@@ -28,7 +28,7 @@ Two layers, merged, project wins on a name collision:
 - **project**: the nearest `.scrills/` directory walking up from where you are — reviewed and committed with the project. Resolution is from your cwd only: a process started elsewhere (a detached child, a state-folder cwd) has no project layer, and `py`/`run` print one stderr line when the caller had one. One it doesn't take: a `.scrills` owned by another user is ignored, and `list`, `py`, `run` and `where` say so.
 - **user**: `~/.scrills` (or `$SCRILLS_HOME`) — capability that travels across projects.
 
-A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed — unless the two sides are the same file through a symlink (an installed mirror), which replaces nothing and stays silent. Either way `list` shows the pair: `<name>  (user, shadowed by project)`. `scrills where` shows both paths, the python, the resolver, and how to install a package.
+A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed — unless the two sides are the same file through a symlink (an installed mirror), which replaces nothing and stays silent. Either way `list` shows the pair: `<name>  (user, shadowed by project)`. `scrills where` shows both paths, the python, the resolver, and how to install a package. An import of a name no layer holds fails with the names they do.
 
 ## Using a scrill
 
@@ -89,14 +89,14 @@ Details per function in its docstring; the IMAP quirks are in references/imap.md
 ```
 
 - Two files, two purposes: `SKILL.md` is the manual — the one a person reads — which is how a skill folder becomes a scrill: add `__init__.py`. A docstring explains its own file (every `.py` opens with one saying what it holds — at least the functions in it). Without a `SKILL.md` the docstring carries the manual — the one-file shape. When `SKILL.md` exists, a frontmattered docstring is ignored as a manifest and `list` says so.
-- The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`; that charset is the one deliberate difference from the skills format. `version` may sit top-level or under `metadata:` as the spec nests it — both are read. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version.
+- The folder name is the import name: a valid Python identifier, lowercase — so `_` where a skill name would have `-`; that charset is the one deliberate difference from the skills format. `version` may sit top-level or under `metadata:` as the spec nests it — both are read. Keep frontmatter `name` the same — `list` flags a mismatch, and a missing description or version. A folder that can never resolve — a hyphenated name, a missing or dangling `__init__.py` — is named with its reason in `list` and in `run`'s refusal; until fixed, such a folder imports as an empty namespace package.
 - Optional `compatibility:` — one free-text line for what the scrill needs around it (a harness, a platform, a binary on PATH); the skills spec's own key, parsed like any frontmatter line. The description still carries the short form — it's all the listing shows.
 - The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). The rest of the docstring and each function's docstring say *how*; longer material goes in `references/*.md`, named in the docstring.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
 - **Detached children lose the project layer.** The project layer belongs to your caller's cwd, exactly like the working directory. A child you spawn from a state folder resolves no project scrills — capture the caller's cwd at call time and pass it as the child's `cwd=`; any subdirectory of the project works, the walk-up does the rest.
 - State that survives between runs goes under `~/.scrills/.state/<name>/` (`$SCRILLS_HOME`-aware) — the scrill's own name, its own folder, never another's.
-- **A sync function never calls `asyncio.run()`.** A `py` snippet that awaits anywhere runs inside an event loop, where `asyncio.run()` raises. For concurrency inside sync code use threads; offer an `async def` twin for callers that await.
+- **A sync function never calls `asyncio.run()`.** A `py` snippet that awaits anywhere runs inside an event loop, where `asyncio.run()` raises. (One escape, so it can't teach you the wrong lesson: the snippet's trailing expression is compiled separately and runs outside the loop — a last-line `asyncio.run(...)` can succeed. The rule stands everywhere else.) For concurrency inside sync code use threads; offer an `async def` twin for callers that await.
 - A name starting with `_` is a draft, invisible until renamed.
 - To make it runnable, define `main()`: it reads `sys.argv`, its return value is the exit code — the console-scripts idiom. No `__main__.py`. Name the non-zero exits it chooses in a module constant beside it — `EXITS = {1: "no answer", 2: "usage"}` — and those runs are recorded as an `outcome` with that name, not an `error`.
 
@@ -131,6 +131,8 @@ Declarative only — readers and `uv` tooling understand it; scrills installs no
 
 ## A run's lifetime
 
+A scrill itself has no lifetime: it is a file, not a process — nothing runs between calls, there is nothing to start, stop, or reload, and an edit is live on the next call.
+
 A scrill run is an ordinary process: the command *is* the run — no wrapper, daemon, or supervisor — so its lifetime belongs to whatever started it. In a terminal it ends when you interrupt it; under an agent it lives in the harness's process tree, and what the harness does at session end is the harness's business; under cron or launchd it runs on the scheduler's clock, independent of any session. Scrills never kills, detaches, or supervises a run — it only records it. Work that must outlive its starter needs a starter that outlives the session (Scheduled work, below). A child a run spawns in the background is a plain process of its own: the run ends, the child continues, and scrills doesn't track it unless the scrill does.
 
 ## Scheduled work
@@ -149,7 +151,7 @@ The dot in `.scrills` keeps default toolchains out: Pyright/Pylance excludes `**
 
 ## Packages
 
-`scrills py` and `scrills run` share one environment (`~/.scrills/.venv`, created on first use). A missing package is an ordinary `ModuleNotFoundError`:
+`scrills py` and `scrills run` share one environment (`~/.scrills/.venv`, created on first use). A missing package raises an ordinary `ModuleNotFoundError`, with one stderr line appended naming the fix:
 
 ```bash
 scrills install httpx
