@@ -1,7 +1,7 @@
 """Claude Code wiring: the ~/.claude/skills/scrills symlink, one permissions.allow rule, and -
 opt-in - one SessionStart hook that injects the library listing into every session. Nothing
 else: no env vars, no model settings. settings.json is merged, never replaced: other keys pass
-through untouched; a file that does not parse is refused."""
+through untouched; a file that does not parse or has incompatible container shapes is refused."""
 import json
 import os
 import shlex
@@ -56,6 +56,19 @@ def load_settings():
     if not isinstance(settings, dict):
         raise RuntimeError(f"harness_config: {path} does not hold an object - fix it by hand, nothing was touched")
     return settings
+
+
+def validate_settings(settings):
+    permissions = settings.get("permissions")
+    if "permissions" in settings and not isinstance(permissions, dict):
+        raise RuntimeError(f"harness_config: permissions in {settings_path()} is not an object - fix it by hand, nothing was touched")
+    if isinstance(permissions, dict) and "allow" in permissions and not isinstance(permissions.get("allow"), list):
+        raise RuntimeError(f"harness_config: permissions.allow in {settings_path()} is not a list - fix it by hand, nothing was touched")
+    hooks = settings.get("hooks")
+    if "hooks" in settings and not isinstance(hooks, dict):
+        raise RuntimeError(f"harness_config: hooks in {settings_path()} is not an object - fix it by hand, nothing was touched")
+    if isinstance(hooks, dict) and "SessionStart" in hooks and not isinstance(hooks.get("SessionStart"), list):
+        raise RuntimeError(f"harness_config: hooks.SessionStart in {settings_path()} is not a list - fix it by hand, nothing was touched")
 
 
 def write_settings(settings):
@@ -144,6 +157,14 @@ def apply(hook=False):
     if not os.path.isdir(claude_dir()):
         raise RuntimeError(f"harness_config: {claude_dir()} does not exist - is Claude Code installed?")
     settings = load_settings()
+    validate_settings(settings)
+    allow = allow_list(settings)
+    starts = None
+    new_hook = None
+    if hook:
+        starts = settings.setdefault("hooks", {}).setdefault("SessionStart", [])
+        if not any(is_our_hook(entry) for entry in starts):
+            new_hook = {"hooks": [{"type": "command", "command": hook_command(), "timeout": 10}]}
     changes = []
     path = link_path()
     state = link_state(target)
@@ -156,20 +177,12 @@ def apply(hook=False):
     elif state == "not a symlink":
         changes.append(f"skipped {path} - exists and is not a symlink, left untouched")
     written = []
-    allow = allow_list(settings)
     if RULE not in allow:
         allow.append(RULE)
         written.append(f"allowed {RULE} in {settings_path()}")
-    if hook:
-        hooks = settings.setdefault("hooks", {})
-        if not isinstance(hooks, dict):
-            raise RuntimeError(f"harness_config: hooks in {settings_path()} is not an object - fix it by hand, nothing was touched")
-        starts = hooks.setdefault("SessionStart", [])
-        if not isinstance(starts, list):
-            raise RuntimeError(f"harness_config: hooks.SessionStart in {settings_path()} is not a list - fix it by hand, nothing was touched")
-        if not any(is_our_hook(entry) for entry in starts):
-            starts.append({"hooks": [{"type": "command", "command": hook_command(), "timeout": 10}]})
-            written.append(f"hooked SessionStart in {settings_path()} - injects the library listing into every session")
+    if new_hook is not None:
+        starts.append(new_hook)
+        written.append(f"hooked SessionStart in {settings_path()} - injects the library listing into every session")
     if written:
         write_settings(settings)
         changes.extend(written)

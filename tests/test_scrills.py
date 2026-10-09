@@ -2,9 +2,12 @@
 # project directory per test. Run: uv run --with pytest==8.4.2 python -m pytest tests/ -q
 import ast
 import datetime
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,6 +42,14 @@ def log_records(home, name):
         return []
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     return [record for record in lines if record.get("name") == name]
+
+
+def load_cli_module():
+    loader = importlib.machinery.SourceFileLoader("scrills_cli_test", CLI)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def cards(home, name):
@@ -295,6 +306,7 @@ def test_run_reexported_main(home, project):
     assert "- facade: facade" in listing.stdout
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="match syntax needs Python 3.10+")
 def test_run_new_syntax_scrill(home, project):
     write_scrill(
         project / ".scrills",
@@ -570,12 +582,78 @@ def test_list_shows_strays_alone(tmp_path):
     assert "orphan.py" in result.stdout
 
 
+def test_run_rejects_project_stray_that_shadows_user_scrill(home, project):
+    write_scrill(home, "straywinner", "user package", "def main():\n    print('user ran')\n    return 0")
+    (project / ".scrills" / "straywinner.py").write_text("print('project stray ran')\ndef main():\n    return 0\n")
+    result = scrills(["run", "straywinner"], home, project)
+    assert result.returncode == 2
+    assert "stray module" in result.stderr
+    assert "project stray ran" not in result.stdout
+    assert "user ran" not in result.stdout
+    assert not log_records(home, "straywinner")
+    assert not cards(home, "straywinner")
+    unknown = scrills(["run", "no_such_winner"], home, project)
+    refusal = next(line for line in unknown.stderr.splitlines() if "there's no scrill named" in line)
+    assert "straywinner" not in refusal
+
+
 def test_run_no_main(home, project):
     write_scrill(project / ".scrills", "libonly", "libonly", "print('imported')\nVALUE = 1")
     result = scrills(["run", "libonly"], home, project)
     assert result.returncode == 2
     assert "defines no main()" in result.stderr
-    assert "imported" not in result.stdout
+    # runnability is gated once, by the boot after the import - so the top level runs first
+    # (convention holds it to imports/constants/defs, and a scrill may bind main at import)
+    assert "imported" in result.stdout
+
+
+def test_boot_ctx_is_popped_before_user_code(home, project):
+    result = scrills(["py"], home, project, stdin="import os\n'SCRILLS_BOOT_CTX' in os.environ")
+    assert result.returncode == 0
+    assert result.stdout == "False\n"
+
+
+def test_run_argv_carries_no_boot_source(home, project):
+    write_scrill(project / ".scrills", "sleeperargv", "sleeperargv", "import time\ndef main():\n    time.sleep(30)\n    return 0")
+    child = subprocess.Popen(
+        [sys.executable, CLI, "run", "sleeperargv"],
+        env={**base_env(), "SCRILLS_HOME": str(home)},
+        cwd=str(project),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        card = Path(home) / ".runs" / f"{child.pid}.json"
+        while not card.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert card.exists()
+        argv = subprocess.run(["ps", "-ww", "-p", str(child.pid), "-o", "command="], capture_output=True, text=True).stdout
+        assert "_boot.py" in argv
+        assert "import atexit" not in argv  # the boot source no longer travels in argv
+        assert "CARD =" not in argv  # and neither does the interpolated run card
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_missing_boot_file_fails_cleanly(home, project, tmp_path):
+    fake_scripts = tmp_path / "scripts"
+    fake_scripts.mkdir()
+    for name in ("scrills", "_scrills_pth.py"):
+        (fake_scripts / name).write_text((Path(CLI).parent / name).read_text())
+    result = subprocess.run(
+        [sys.executable, str(fake_scripts / "scrills"), "py"],
+        input="1",
+        env={**base_env(), "SCRILLS_HOME": str(home)},
+        cwd=str(project),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "_boot.py is missing" in result.stderr
+    assert "can't open file" not in result.stderr
+    assert not cards(home, "py")  # the refusal happens before a run is registered
 
 
 def test_run_unknown(home, project):
@@ -670,6 +748,31 @@ def test_process_pool_over_scrill(home, project):
     assert result.stdout == "[2, 4, 6]\n"
 
 
+@pytest.mark.parametrize("method", ["spawn", "forkserver", "default"])
+def test_run_process_pool_over_scrill(home, project, method):
+    write_scrill(project / ".scrills", "poolworker", "pool worker", "def double(n):\n    return n * 2")
+    write_scrill(
+        project / ".scrills",
+        "poolrunner",
+        "pool runner",
+        """
+        import multiprocessing
+        import sys
+        from concurrent.futures import ProcessPoolExecutor
+        from scrills import poolworker
+
+        def main():
+            options = {} if sys.argv[1] == "default" else {"mp_context": multiprocessing.get_context(sys.argv[1])}
+            with ProcessPoolExecutor(max_workers=2, **options) as pool:
+                print(list(pool.map(poolworker.double, [1, 2, 3])))
+            return 0
+        """,
+    )
+    result = scrills(["run", "poolrunner", method], home, project)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "[2, 4, 6]\n"
+
+
 def test_spawned_workers_write_no_pycache_into_scrills(home, project):
     write_scrill(project / ".scrills", "spawnable", "spawnable", "def double(n):\n    return n * 2")
     code = textwrap.dedent(
@@ -705,6 +808,17 @@ def test_broken_venv_says_rebuild(tmp_path):
     assert result.returncode == 1
     assert f"rm -rf {fresh / '.venv'}" in result.stderr
     assert "no longer exists" in result.stderr
+
+
+def test_invalid_venv_lock_has_the_writable_library_remedy(tmp_path):
+    fresh = tmp_path / "lockedhome"
+    lock = fresh / ".runs" / "venv.lock"
+    lock.mkdir(parents=True)
+    result = scrills(["py"], fresh, tmp_path, stdin="1")
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert str(lock) in result.stderr
+    assert f"The user library ({fresh}) must be a writable directory" in result.stderr
 
 
 def test_site_packages_picked_by_pyvenv_cfg(tmp_path):
@@ -1607,8 +1721,10 @@ def test_log_rotation_waits_for_the_lock(home, project):
     filler = json.dumps({"name": "filler", "status": "ok"}) + "\n"
     log.write_text(filler * (1048576 // len(filler) + 2))
     big = log.stat().st_size
-    with open(log) as held:
-        fcntl.flock(held, fcntl.LOCK_EX)
+    lock = runs / "log.lock"
+    lock.touch()
+    with open(lock) as held:
+        fcntl.flock(held, fcntl.LOCK_SH)
         result = scrills(["py"], home, project, stdin="1")
         assert result.returncode == 0
         assert '{"marker": true}' in prev.read_text()
@@ -1617,6 +1733,64 @@ def test_log_rotation_waits_for_the_lock(home, project):
     assert result.returncode == 0
     assert prev.stat().st_size > 1048576
     assert log.stat().st_size < 4096
+
+
+def test_log_reader_cannot_lose_a_file_to_rotation(tmp_path):
+    core = load_cli_module()
+    home = tmp_path / "loghome"
+    runs = home / ".runs"
+    runs.mkdir(parents=True)
+    prev = runs / "log.prev.jsonl"
+    log = runs / "log.jsonl"
+    prev_record = {"id": "prev", "name": "prev"}
+    current_record = {"id": "current", "name": "current"}
+    arriving_record = {"id": "arriving", "name": "arriving"}
+    prev.write_text(json.dumps(prev_record) + "\n")
+    log.write_text(json.dumps(current_record) + "\n" + "x" * 1048576 + "\n")
+    original_read = core.read_text
+    rotated = False
+
+    def read_with_arrival(path):
+        nonlocal rotated
+        text = original_read(path)
+        if os.path.basename(path) == "log.prev.jsonl" and not rotated:
+            rotated = True
+            assert core.append_log(str(home), arriving_record)
+        return text
+
+    core.read_text = read_with_arrival
+    records = core.log_records(str(home))
+    assert {record.get("id") for record in records} >= {"prev", "current", "arriving"}
+    assert json.loads(prev.read_text().splitlines()[0]) == prev_record
+
+
+def test_sweep_snapshots_ids_after_all_liveness_probes(tmp_path):
+    core = load_cli_module()
+    home = tmp_path / "sweephome"
+    runs = home / ".runs"
+    runs.mkdir(parents=True)
+    first = {"id": "first-dead", "name": "first", "pid": 9100001, "started": "2026-10-09T00:00:00+00:00"}
+    finishing = {"id": "finishing", "name": "finishing", "pid": 9100002, "started": "2026-10-09T00:00:00+00:00"}
+    duplicate = {**first, "name": "duplicate", "pid": 9100003}
+    for card in (first, finishing, duplicate):
+        (runs / f"{card['pid']}.json").write_text(json.dumps(card))
+    finalized = False
+
+    def finalize_while_probing(path, pid):
+        nonlocal finalized
+        if pid == finishing["pid"] and not finalized:
+            finalized = True
+            assert core.append_log(str(home), {**finishing, "status": "ok", "exit": 0})
+        return False
+
+    core.held = finalize_while_probing
+    _, died, unrecorded = core.sweep(str(home))
+    records = core.log_records(str(home))
+    assert not unrecorded
+    assert [card["id"] for card in died] == [first["id"]]
+    assert [record["status"] for record in records if record.get("id") == first["id"]] == ["died"]
+    assert [record["status"] for record in records if record.get("id") == finishing["id"]] == ["ok"]
+    assert not list(runs.glob("*.json"))
 
 
 def test_ps_empty(tmp_path):
@@ -1679,6 +1853,18 @@ def _old_python():
 def test_old_launcher_relaunches_onto_venv(home, project):
     old = _old_python()
     assert old is not None
+    venv = str(Path(home) / ".venv" / "bin" / "python")
+
+    def major_minor(python):
+        result = subprocess.run(
+            [python, "-c", "import sys; print('.'.join(map(str, sys.version_info[:2])))"],
+            capture_output=True,
+            text=True,
+        )
+        return tuple(int(part) for part in result.stdout.strip().split("."))
+
+    if major_minor(venv) <= major_minor(old):
+        pytest.skip("the venv interpreter is not newer than the launcher")
     write_scrill(
         project / ".scrills",
         "modern",
@@ -1945,6 +2131,31 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
         assert os.path.realpath(link) == os.path.realpath(CLI)
 
 
+@pytest.mark.parametrize(
+    "missing",
+    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/SKILL.md"],
+)
+def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
+    repo = Path(CLI).resolve().parent.parent.parent
+    clone = tmp_path / missing.replace("/", "-")
+    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/SKILL.md"):
+        target = clone / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / relative, target)
+    (clone / missing).unlink()
+    bin_dir = tmp_path / ("bin-" + Path(missing).name)
+    result = subprocess.run(
+        ["sh", "install.sh", "--no-skill"],
+        cwd=str(clone),
+        env={**base_env(), "HOME": str(tmp_path / "fakehome"), "SCRILLS_BIN": str(bin_dir)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert missing in result.stderr
+    assert not (bin_dir / "scrills").exists()
+
+
 def test_install_sh_links_the_skill_for_claude_and_pi(tmp_path):
     repo = Path(CLI).resolve().parent.parent.parent
     fake = tmp_path / "fakehome"
@@ -2046,6 +2257,32 @@ def test_run_scrill_missing_dependency_gets_the_hint(home, project):
     assert "no scrill named nope" in result.stderr
 
 
+def test_unreadable_ignored_folder_is_reported_by_list_and_run(home, project):
+    folder = project / ".scrills" / "sealed"
+    folder.mkdir()
+    (folder / "main.py").write_text("def main():\n    return 0\n")
+    mode = folder.stat().st_mode
+    folder.chmod(0)
+    try:
+        try:
+            os.listdir(folder)
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("this user can still enumerate a mode-000 folder")
+        listing = scrills(["list"], home, project)
+        assert listing.returncode == 0
+        assert "Traceback" not in listing.stderr
+        assert "sealed" in listing.stdout
+        assert "cannot inspect" in listing.stdout
+        result = scrills(["run", "sealed"], home, project)
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        assert "cannot inspect" in result.stderr
+    finally:
+        folder.chmod(mode)
+
+
 def test_list_raises_folders_that_never_resolve(home, project):
     layer = project / ".scrills"
     (layer / "deep-research").mkdir()
@@ -2123,26 +2360,34 @@ def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
     assert str(notadir) in result.stderr
 
 
-def test_boot_templates_parse():
-    tree = ast.parse(Path(CLI).read_text())
-    templates = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ("PTH_MODULE", "FINISH", "PY_BODY", "RUN_BODY"):
-            templates[node.targets[0].id] = node.value.value
-    assert len(templates) == 4
-    ast.parse(templates["PTH_MODULE"])
-    ast.parse(templates["PY_BODY"])
-    ast.parse(templates["RUN_BODY"])
-    boot = templates["FINISH"].format(
-        card={},
-        card_path="/x",
-        lock_fd=None,
-        log="/x/log",
-        prev="/x/prev",
-        started=0.0,
-        traceparent="00-" + "ab" * 16 + "-" + "cd" * 8 + "-01",
-        known=[],
-    )
-    ast.parse(boot)
-    ast.parse(boot + templates["PY_BODY"])
-    ast.parse(boot + templates["RUN_BODY"])
+def test_boot_and_resolver_are_real_parseable_files():
+    # the boot and the resolver source live as real files beside the CLI: they must compile,
+    # under the 3.9 grammar too (a stock launcher may be old, and the venv may have been built by one)
+    for name in ("_boot.py", "_scrills_pth.py"):
+        source = (Path(CLI).parent / name).read_text()
+        ast.parse(source, filename=name)
+        ast.parse(source, filename=name, feature_version=(3, 9))
+
+
+def test_docs_include_offsets():
+    # docs pages include repo files by line offset; the offset must skip exactly the intended
+    # head block, or edits leak frontmatter/title text into the built site silently
+    repo = Path(CLI).resolve().parent.parent.parent
+    skill_lines = (repo / "scrills" / "SKILL.md").read_text().splitlines()
+    closing = skill_lines.index("---", 1)
+    assert skill_lines[0] == "---"
+    expected = {
+        "docs/manual.md": ("scrills/SKILL.md", closing + 1),
+        "docs/index.md": ("README.md", 2),
+        "docs/examples.md": ("examples/README.md", 2),
+    }
+    for doc, (target, skipped) in expected.items():
+        text = (repo / doc).read_text()
+        match = re.search(r'--8<--\s+"' + re.escape(target) + r':(\d+)"', text)
+        assert match is not None, f"{doc}: include of {target} not found"
+        assert int(match.group(1)) == skipped + 1, (
+            f"{doc} includes {target} starting at line {match.group(1)}, but the block it must skip "
+            f"ends at line {skipped} - fix the offset so it skips exactly that block"
+        )
+    assert (repo / "README.md").read_text().splitlines()[0].startswith("# ")
+    assert (repo / "examples" / "README.md").read_text().splitlines()[0].startswith("# ")

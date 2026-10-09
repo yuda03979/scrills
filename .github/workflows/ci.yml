@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: tests on Python ${{ matrix.python }}
+        run: |
+          python --version
+          python -m pip install pytest==8.4.2
+          python -m pytest tests/ -q
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v3
+      - name: 3.9 grammar
+        run: python -c "import ast, pathlib; [ast.parse(p.read_text(), feature_version=(3,9)) for p in [pathlib.Path('scrills/scripts/scrills'), *pathlib.Path('scrills/scripts').glob('*.py')]]"
+      - name: docs
+        run: uvx --with-requirements docs/requirements.txt mkdocs build --strict
+
+  version-bump:
+    # the version lives once, in SKILL.md's first frontmatter block: body examples do not count
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: SKILL.md changed => metadata.version changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import subprocess
+
+          path = "scrills/SKILL.md"
+          base = os.environ["BASE_SHA"]
+          if subprocess.run(["git", "diff", "--quiet", base, "HEAD", "--", path]).returncode == 0:
+              raise SystemExit(0)
+
+          def metadata_version(text):
+              lines = text.splitlines()
+              if not lines or lines[0].strip() != "---":
+                  raise SystemExit(f"{path}: first frontmatter block is missing")
+              try:
+                  end = next(index for index, line in enumerate(lines[1:], 1) if line.strip() == "---")
+              except StopIteration:
+                  raise SystemExit(f"{path}: first frontmatter block is unclosed")
+              block = lines[1:end]
+              try:
+                  start = next(index for index, line in enumerate(block) if line == "metadata:")
+              except StopIteration:
+                  raise SystemExit(f"{path}: first frontmatter block has no metadata object")
+              fields = []
+              for line in block[start + 1:]:
+                  if line.strip() and not line[:1].isspace():
+                      break
+                  match = re.fullmatch(r"(\s+)([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*", line)
+                  if match:
+                      fields.append((len(match.group(1)), match.group(2), match.group(3)))
+              if not fields:
+                  raise SystemExit(f"{path}: metadata object is empty")
+              direct_indent = min(indent for indent, _, _ in fields)
+              values = [value for indent, key, value in fields if indent == direct_indent and key == "version"]
+              if len(values) != 1 or not values[0]:
+                  raise SystemExit(f"{path}: first frontmatter block needs exactly one metadata.version")
+              value = values[0]
+              if value[:1] in ("'", '"'):
+                  try:
+                      value = ast.literal_eval(value)
+                  except (SyntaxError, ValueError):
+                      raise SystemExit(f"{path}: metadata.version is not a valid quoted string") from None
+              return str(value)
+
+          before = subprocess.check_output(["git", "show", f"{base}:{path}"], text=True)
+          after = subprocess.check_output(["git", "show", f"HEAD:{path}"], text=True)
+          old = metadata_version(before)
+          new = metadata_version(after)
+          if old == new:
+              raise SystemExit(f"{path} changed but metadata.version stayed {new!r} - bump it")
+          print(f"metadata.version: {old} -> {new}")
+          PY

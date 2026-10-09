@@ -6,7 +6,9 @@ This file is for a coding agent changing this repository. If you want to *use* s
 ## The shape of the repo
 
 ```
-scrills/scripts/scrills   the entire implementation, one file
+scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
+scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
+scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
 scrills/SKILL.md          the manual agents read; also where the version lives
 examples/.scrills/        the examples project layer (harness wiring today)
 tests/                    subprocess tests that drive the real CLI
@@ -14,15 +16,20 @@ docs/                     the documentation site
 install.sh                command symlink plus detected harness skill links, nothing else
 ```
 
-The command is a symlink into this repo, and the CLI finds `SKILL.md` by walking up from its own
-realpath. Keep `scrills/scripts/scrills` and `scrills/SKILL.md` in that relationship.
+The command is a symlink into this repo, and the CLI finds `SKILL.md`, `_boot.py` and
+`_scrills_pth.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
+relationship. The boot and resolver are real files, never source-in-a-string: edit them
+directly, lint them, and trust the compile guard in the suite. The run context reaches the boot
+as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin - argv
+carries no code.
 
 ## Rules that are not negotiable
 
-- **One file, standard library only.** `scrills/scripts/scrills` imports nothing outside the
-  stdlib and must stay parseable by **Python 3.9** — a stock launcher (cron, an old `/usr/bin/python3`)
-  reads it before anything relaunches onto the venv. Check with
-  `python3 -c "import ast; ast.parse(open('scrills/scripts/scrills').read(), feature_version=(3,9))"`.
+- **One folder, standard library only.** Everything under `scrills/scripts/` imports nothing
+  outside the stdlib and must stay parseable by **Python 3.9** — a stock launcher (cron, an old
+  `/usr/bin/python3`) reads the CLI before anything relaunches onto the venv, and the venv itself
+  may have been built by one. Check with
+  `python3 -c "import ast, pathlib; [ast.parse(p.read_text(), feature_version=(3,9)) for p in [pathlib.Path('scrills/scripts/scrills'), *pathlib.Path('scrills/scripts').glob('*.py')]]"`.
 - **Docstrings are the product.** A scrill's module and function docstrings are its manual —
   `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` is the
   manual when present — the docstring then explains its own file, and a frontmattered one is
@@ -55,7 +62,7 @@ because only that file is claimed as a skill.
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **128 passed**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **147 passed** on Python 3.13; Python 3.9 reports **145 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
 spend money or make noise.**
@@ -76,4 +83,6 @@ uvx --with-requirements docs/requirements.txt mkdocs build --strict
 ```
 
 `docs/manual.md` and `docs/examples.md` include `scrills/SKILL.md` and `examples/README.md` by
-snippet — one source per file. Don't paste their content into the docs tree.
+snippet — one source per file. Don't paste their content into the docs tree. The includes skip
+each file's head block by line offset; `test_docs_include_offsets` pins the offsets to the real
+blocks — if it fails, fix the offset, never the assertion.

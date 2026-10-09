@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from conftest import base_env
 
 CLI = str(Path(__file__).resolve().parent.parent / "scrills" / "scripts" / "scrills")
@@ -139,6 +141,37 @@ def test_harness_config_refuses_corrupt_settings_before_touching_anything(home, 
     assert "not valid JSON" in result.stderr
     assert (fake / ".claude" / "settings.json").read_text() == "{broken json"
     assert not (fake / ".claude" / "skills" / "scrills").exists()
+
+
+@pytest.mark.parametrize(
+    ("settings", "arguments", "foreign_link"),
+    [
+        ({"permissions": []}, ["apply"], False),
+        ({"permissions": {"allow": {}}}, ["apply"], False),
+        ({"hooks": []}, ["apply", "--hook"], False),
+        ({"hooks": {"SessionStart": {}}}, ["apply", "--hook"], True),
+    ],
+)
+def test_harness_config_refuses_invalid_shapes_before_touching_anything(home, tmp_path, settings, arguments, foreign_link):
+    raw = json.dumps(settings, separators=(",", ":"), ensure_ascii=False) + "\n"
+    fake, env = claude_home(tmp_path, raw)
+    link = fake / ".claude" / "skills" / "scrills"
+    old_target = None
+    if foreign_link:
+        target = tmp_path / "another-install" / "scrills"
+        target.mkdir(parents=True)
+        link.symlink_to(target, target_is_directory=True)
+        old_target = os.readlink(link)
+    before = (fake / ".claude" / "settings.json").read_bytes()
+    result = scrills(["run", "harness_config", *arguments], home, extra_env=env)
+    assert result.returncode == 1
+    assert "nothing was touched" in result.stderr
+    assert (fake / ".claude" / "settings.json").read_bytes() == before
+    if foreign_link:
+        assert link.is_symlink()
+        assert os.readlink(link) == old_target
+    else:
+        assert not os.path.lexists(link)
 
 
 def test_harness_config_usage(home, tmp_path):
