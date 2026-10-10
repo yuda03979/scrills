@@ -9,6 +9,7 @@
 import ast, atexit, asyncio, importlib.util, inspect, json, os, sys, time, traceback, types
 BOOT_FILE = os.path.realpath(__file__)
 MANIFEST_FILE = os.path.join(os.path.dirname(BOOT_FILE), '_manifest.py')
+HISTORY_FILE = os.path.join(os.path.dirname(BOOT_FILE), '_history.py')
 RAW_CTX = os.environ.pop('SCRILLS_BOOT_CTX', None)
 if RAW_CTX is None:
     sys.stderr.write("scrills: _boot.py is the scrills command's exec target, not a command itself - run scrills instead\n")
@@ -18,6 +19,9 @@ manifest_spec = importlib.util.spec_from_file_location('_scrills_manifest', MANI
 manifest = importlib.util.module_from_spec(manifest_spec)
 sys.modules[manifest_spec.name] = manifest
 manifest_spec.loader.exec_module(manifest)
+history_spec = importlib.util.spec_from_file_location('_scrills_history', HISTORY_FILE)
+history = importlib.util.module_from_spec(history_spec)
+history_spec.loader.exec_module(history)
 CARD = CTX['card']
 CARD_PATH = CTX['card_path']
 LOCK_FD = CTX['lock_fd']
@@ -28,6 +32,8 @@ STARTED = CTX['started']
 KNOWN = CTX['known']
 VERB = CTX['verb']
 BOOT_PID = os.getpid()
+for destination in CTX['history']['destinations']:
+    os.set_inheritable(destination, False)
 OUTCOME = {}
 if VERB == 'run':
     main_module = sys.modules.get('__main__')
@@ -47,7 +53,7 @@ LAYER_DIRS = [path for path in os.environ.get('SCRILLS_LAYERS', '').split(os.pat
 def _plumbing(filename):
     if filename.startswith('<'):
         return filename != '<py>'
-    if os.path.realpath(filename) in (BOOT_FILE, MANIFEST_FILE):
+    if os.path.realpath(filename) in (BOOT_FILE, MANIFEST_FILE, HISTORY_FILE):
         return True
     if any(filename.startswith(layer + os.sep) for layer in LAYER_DIRS):
         return False
@@ -95,7 +101,7 @@ def _note_error(error):
                 filename = tb.tb_frame.f_code.co_filename
                 if ours(filename):
                     scoped = (filename, tb.tb_lineno)
-                elif not filename.startswith('<') and os.path.realpath(filename) not in (BOOT_FILE, MANIFEST_FILE):
+                elif not filename.startswith('<') and os.path.realpath(filename) not in (BOOT_FILE, MANIFEST_FILE, HISTORY_FILE):
                     last = (filename, tb.tb_lineno)
                 tb = tb.tb_next
             spot = scoped or last
@@ -104,11 +110,13 @@ def _note_error(error):
     except Exception:
         pass
 def _write_record():
-    if CARD is None or 'exit' not in OUTCOME or os.getpid() != BOOT_PID:
+    if os.getpid() != BOOT_PID:
         return
     try:
+        if 'exit' not in OUTCOME:
+            return
         import fcntl
-        record = dict(CARD)
+        record = dict(CTX['info'])
         code = OUTCOME['exit']
         if code == 0:
             status = 'ok'
@@ -122,9 +130,21 @@ def _write_record():
         for key in ('error_type', 'error_at'):
             if key in OUTCOME:
                 record[key] = OUTCOME[key]
-        names = sorted(set(name.split('.')[1] for name in sys.modules if name.startswith('scrills.')))
-        if names:
-            record['imported'] = dict((name, manifest.version_of(sys.modules.get('scrills.' + name))) for name in names)
+        try:
+            names = sorted(set(name.split('.')[1] for name in sys.modules if name.startswith('scrills.')))
+            if names:
+                record['imported'] = dict((name, manifest.version_of(sys.modules.get('scrills.' + name))) for name in names)
+        except Exception:
+            pass
+        try:
+            history.finish(CTX['history'], record)
+        except (OSError, ValueError):
+            try:
+                os.write(2, b'scrills: history could not save the execution outcome\n')
+            except OSError:
+                pass
+        if CARD is None:
+            return
         lock = None
         try:
             lock = os.open(LOG_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
@@ -149,9 +169,14 @@ def _write_record():
     except Exception:
         pass
     finally:
+        if CARD is not None and 'exit' in OUTCOME:
+            try:
+                os.remove(CARD_PATH)
+            except OSError:
+                pass
         try:
-            os.remove(CARD_PATH)
-        except OSError:
+            history.deliver(CTX['history'])
+        except Exception:
             pass
 def _finish(code):
     OUTCOME['exit'] = code
@@ -184,8 +209,13 @@ if VERB == 'py':
     def _echo(value):
         text = repr(value)
         if ECHO_CAP > 0 and len(text) > ECHO_CAP:
-            text = text[:ECHO_CAP] + '\n… (+{:,} chars — print it or write it to a file)'.format(len(text) - ECHO_CAP)
-        print(text)
+            shown = text[:ECHO_CAP] + '\n… (+{:,} chars — recover with scrills history)'.format(len(text) - ECHO_CAP)
+            if os.getpid() == BOOT_PID and sys.stdout is sys.__stdout__:
+                history.echo(CTX['history'], text, shown, sys.stdout)
+            else:
+                print(shown)
+        else:
+            print(text)
     status = 0
     flag = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
     try:

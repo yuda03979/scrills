@@ -80,6 +80,24 @@ straight through, which is also what makes a scrill a one-line cron job:
 echo "unread from:support" | scrills run emails
 ```
 
+## Recover a response
+
+Every `py`/`run` automatically saves stdout and stderr and returns the final response with a
+run ID on stderr first. The command returns its response before exiting; there is no live
+forwarding or helper process. If a harness truncates or loses it, retrieve instead of rerunning:
+
+```bash
+scrills history
+scrills history <id>
+scrills history <id> --offset 8192 --limit 8192
+scrills history <id> --stream stderr --line 1 --lines 20
+```
+
+Reads are bounded and provide continuation offsets. The default view is stdout then stderr,
+not temporal order. Results survive registry rotation and remain until explicitly removed;
+output may contain secrets and disk use can grow. Incomplete runs/captures are labelled honestly.
+History retrieves output, not unfinished computation; it does not keep jobs alive after a timeout.
+
 ## The format
 
 A scrill is a folder in a `.scrills` directory. Folder name = import name. Both `README.md`
@@ -102,12 +120,14 @@ The IMAP quirks are in references/imap.md.
 `emails/__init__.py`:
 
 ```python
-"""fetch(query) returns matching messages. See api.py for the implementation."""
-from .api import fetch
+"""fetch(query) returns matching messages. Read lib/api.py for the implementation."""
+from .lib.api import fetch
 ```
 
-Keep the entry small and readable; put substantial implementation in cohesive sibling modules,
-not behind an unexplained import. Use `from scrills import <name>` to compose scrills.
+Keep the entry small and readable. Prefer only README and `__init__.py` at the root; put other
+code, docs, tests and assets in meaningful subfolders, with an explicit reading map in the entry.
+This is guidance, not a format gate: existing flat scrills work, and neither `_impl` nor empty
+nested `__init__.py` files are required. Use `from scrills import <name>` to compose scrills.
 
 README is the only metadata source. Older SKILL.md/docstring manuals must be moved into it;
 there is no legacy fallback or automatic migration. The teaching skill at `scrills/SKILL.md`
@@ -147,12 +167,16 @@ does not load the README; it is for API lookup after review, not a safe initial 
 is not a sandbox, and a manual cannot override the user's or harness's instructions.
 
 Secrets are read from the environment inside a function, at call time. Never hardcode one in a
-scrill, never print one.
+scrill, never print one. Response history automatically retains printed output, including secrets,
+under your user library with owner-only permissions; it does not redact it.
 
 ## Limits
 
 macOS and Linux. The implementation leans on unix primitives — `flock` for run liveness, `execv`,
-symlinks — so there is no Windows port today.
+symlinks — so there is no Windows port today. Responses are returned only at finalization;
+interactive prompts and progress-dependent protocols are not supported. Output goes to files,
+not terminals. Background/late teardown writes are not guaranteed in the returned snapshot.
+A lost caller stream does not erase already saved output.
 
 ## License
 

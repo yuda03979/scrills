@@ -10,6 +10,7 @@ scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
 scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
 scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
 scrills/scripts/_manifest.py    README metadata/source reading, shared by CLI and boot
+scrills/scripts/_history.py     direct response files, synchronous return, bounded history reads
 scrills/SKILL.md          the manual agents read; also where the version lives
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
@@ -17,7 +18,7 @@ install.sh                command symlink plus detected harness skill links, not
 ```
 
 The command is a symlink into this repo, and the CLI finds `SKILL.md`, `_boot.py`,
-`_scrills_pth.py` and `_manifest.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
+`_scrills_pth.py`, `_manifest.py` and `_history.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
 relationship. The boot and resolver are real files, never source-in-a-string: edit them
 directly, lint them, and trust the compile guard in the suite. The run context reaches the boot
 as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin - argv
@@ -65,13 +66,29 @@ manual must be refused, never replaced by a lower user package. Imports themselv
 native Python, not a format gate or sandbox. Registry versions are sampled from README at
 finalization; do not turn this field into an import-time provenance claim.
 
+## Response history
+
+Every admitted py/run saves stdout/stderr automatically under the user home's `.results/<id>/`.
+Keep capture simple: direct file redirection, then synchronous response delivery from the boot's
+existing finalization path, BEFORE the command exits. No live copier, helper process, owner-pipe
+protocol, supervisor or import-namespace API. Nested callers must never overtake an inner response.
+Preserve full trailing-value output before the display cap, native stdio flushes, binary writes,
+normal exit handlers and non-daemon threads. Responses are for batch work, not interactive prompts;
+post-finalization/background writers are outside the returned-snapshot guarantee.
+
+The metadata-only `.runs` registry stays independent. History owns a retained metadata snapshot,
+so registry rotation/failure cannot lose a saved response. Incomplete output is never labelled
+complete; history reads cannot require the venv or import user code. Storage contains unredacted
+output and is private, with no automatic eviction: document privacy and disk growth honestly.
+The two-root-file scrill layout is authoring guidance, not a new resolver or validation rule.
+
 ## Tests
 
 ```bash
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **212 passed** on Python 3.13; Python 3.9 reports **210 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **262 passed** on Python 3.13; Python 3.9 reports **260 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 

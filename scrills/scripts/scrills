@@ -80,6 +80,11 @@
 # readers hold a shared lock on stable log.lock across both history files, and rotation past 1 MiB
 # needs its non-blocking exclusive lock (a blocked writer skips rotation and still appends).
 # Registry writes never break a run - any failure degrades to a no-op.
+# Responses are separate: every admitted py/run automatically retains stdout and stderr under
+# <home>/.results/<id>. Output goes directly to files. The boot's finalizer returns the saved
+# response with an ID on stderr BEFORE exiting, so nested callers cannot overtake its output.
+# _history.py owns storage and bounded reads; no helper process, live copier or supervision.
+# No input/code/argv is stored. Output may contain secrets; it stays until explicitly removed.
 #
 # When a run dies on a missing scrill or third-party package, the boot appends one stderr line
 # to the traceback - the names that exist, or `scrills install <pkg>`: raised louder, never
@@ -106,7 +111,9 @@ SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
 BOOT_FILE = os.path.join(os.path.dirname(SCRIPT), "_boot.py")
 PTH_SOURCE = os.path.join(os.path.dirname(SCRIPT), "_scrills_pth.py")
 MANIFEST_FILE = os.path.join(os.path.dirname(SCRIPT), "_manifest.py")
+HISTORY_FILE = os.path.join(os.path.dirname(SCRIPT), "_history.py")
 _MANIFEST = None
+_HISTORY = None
 USAGE = """usage: scrills <verb>
   list               the library, one "- name: description" line per scrill
   read <name>        read the full README and entry source, without importing
@@ -114,6 +121,7 @@ USAGE = """usage: scrills <verb>
   run <name> ...     run a scrill that defines main() as a program
   install <pkg> ...  install a package into the shared environment (pip)
   ps                 runs: what's running now, what died, the last 24h
+  history [id] ...   recover responses; --offset/--limit, --line/--lines, --stream
   where              paths: layers, python, how to install a package
   --version          the scrills version"""
 
@@ -324,6 +332,19 @@ def manifest_module():
     return _MANIFEST
 
 
+def history_module():
+    global _HISTORY
+    if _HISTORY is None:
+        try:
+            spec = importlib.util.spec_from_file_location("_scrills_history", HISTORY_FILE)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except (OSError, SyntaxError) as error:
+            fail(f"scrills: cannot load {HISTORY_FILE}: {error}\nReinstall keeping the scrills/ folder intact")
+        _HISTORY = module
+    return _HISTORY
+
+
 def entry_documents(name, entry):
     reader = manifest_module()
     manual = reader.read_manual(entry)
@@ -416,7 +437,7 @@ def take_log_lock(home, operation):
 
 
 def now_iso():
-    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def who():
@@ -506,12 +527,17 @@ def load_card(path):
     return card if isinstance(card, dict) else None
 
 
-def register(home, verb, name, layer, pid, run_id, trace, parent):
+def make_card(verb, name, layer, pid, run_id, trace, parent):
     card = {"verb": verb, "name": name, "id": run_id, "trace": trace, "pid": pid, "cwd": os.getcwd(), "who": who(), "started": now_iso()}
     if parent is not None:
         card["parent"] = parent
     if layer is not None:
         card["layer"] = layer
+    return card
+
+
+def register(home, card):
+    pid = card["pid"]
     try:
         directory = runs_dir(home)
         os.makedirs(directory, exist_ok=True)
@@ -813,7 +839,7 @@ def boot_ctx(home, verb, card, lock_fd, started, run_id, trace, flags, known):
 
 
 def boot_path():
-    for path in (BOOT_FILE, MANIFEST_FILE):
+    for path in (BOOT_FILE, MANIFEST_FILE, HISTORY_FILE):
         if not os.path.isfile(path):
             fail(f"scrills: {path} is missing - reinstall keeping the scrills/ folder intact")
     return BOOT_FILE
@@ -849,6 +875,23 @@ def export_layers(found):
     os.environ["SCRILLS_LAYERS"] = os.pathsep.join(directory for _, directory in found)
 
 
+def execute(home, found, verb, name, layer, argv, boot):
+    python = ensure_runtime(home)
+    export_layers(found)
+    run_id = os.urandom(8).hex()
+    trace, parent, flags = lineage()
+    info = make_card(verb, name, layer, os.getpid(), run_id, trace, parent)
+    try:
+        response = history_module().start(home, info)
+    except (OSError, ValueError) as error:
+        fail(f"scrills: cannot prepare response history: {error}\nFix {os.path.join(home, '.results')} before retrying; no user code ran")
+    card, lock_fd = register(home, info)
+    context = boot_ctx(home, verb, card, lock_fd, time.time(), run_id, trace, flags, known_names(found))
+    context.update(info=info, history=response)
+    os.environ["SCRILLS_BOOT_CTX"] = json.dumps(context)
+    os.execv(python, [python, *child_flags(home), boot, *argv])
+
+
 def cmd_py(argv):
     if argv:
         fail(f"scrills py: unknown argument {argv[0]}\n{USAGE}", 2)
@@ -859,13 +902,7 @@ def cmd_py(argv):
     warn_foreign(foreign)
     warn_shadows(found)
     warn_lost_project(home, found)
-    python = ensure_runtime(home)
-    export_layers(found)
-    run_id = os.urandom(8).hex()
-    trace, parent, flags = lineage()
-    card, lock_fd = register(home, "py", "py", None, os.getpid(), run_id, trace, parent)
-    os.environ["SCRILLS_BOOT_CTX"] = json.dumps(boot_ctx(home, "py", card, lock_fd, time.time(), run_id, trace, flags, known_names(found)))
-    os.execv(python, [python, *child_flags(home), boot])
+    execute(home, found, "py", "py", None, [], boot)
 
 
 def cmd_run(argv):
@@ -881,13 +918,7 @@ def cmd_run(argv):
     manual = manifest_module().read_manual(provider["entry"])
     if manual.error is not None:
         fail(f"scrills run: {name} is not ready - {manual.error}", 2)
-    python = ensure_runtime(home)
-    export_layers(found)
-    run_id = os.urandom(8).hex()
-    trace, parent, flags = lineage()
-    card, lock_fd = register(home, "run", name, provider["layer"], os.getpid(), run_id, trace, parent)
-    os.environ["SCRILLS_BOOT_CTX"] = json.dumps(boot_ctx(home, "run", card, lock_fd, time.time(), run_id, trace, flags, known_names(found)))
-    os.execv(python, [python, *child_flags(home), boot, name, *argv[1:]])
+    execute(home, found, "run", name, provider["layer"], [name, *argv[1:]], boot)
 
 
 def cmd_install(argv):
@@ -1106,7 +1137,8 @@ def relaunch():
 
 
 def main():
-    relaunch()
+    if sys.argv[1:2] != ["history"]:
+        relaunch()
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(USAGE)
@@ -1128,6 +1160,8 @@ def main():
         cmd_install(rest)
     elif verb == "ps":
         cmd_ps(rest)
+    elif verb == "history":
+        sys.exit(history_module().show(user_home(), rest))
     elif verb == "where":
         cmd_where(rest)
     else:

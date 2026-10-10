@@ -51,7 +51,7 @@ else
     root=$SRC
 fi
 
-for required in scrills/scripts/scrills scrills/scripts/_boot.py scrills/scripts/_scrills_pth.py scrills/scripts/_manifest.py scrills/SKILL.md; do
+for required in scrills/scripts/scrills scrills/scripts/_boot.py scrills/scripts/_scrills_pth.py scrills/scripts/_manifest.py scrills/scripts/_history.py scrills/SKILL.md; do
     [ -f "$root/$required" ] || { echo "install.sh: missing required file $required under $root" >&2; exit 1; }
 done
 

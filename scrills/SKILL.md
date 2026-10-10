@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
 ---
 
 # scrills
@@ -53,7 +53,7 @@ PY
 
 `help(emails)` is useful for API lookup after review, but requires importing the module and does not load its README. Never use it as the initial reading step.
 
-`scrills py` is one-shot: stdout passes through, the trailing expression echoes like a REPL, top level may `await`, and **nothing persists between calls** — keep anything worth keeping in files. A huge trailing expression echoes truncated (8,192 characters; `SCRILLS_ECHO_CAP` overrides, 0 = uncapped) — print to a file when you want it all.
+`scrills py` is one-shot: the final response is returned after execution, the trailing expression echoes like a REPL, top level may `await`, and **Python variables do not persist between calls**. Responses are saved automatically. A huge trailing expression displays truncated (8,192 characters; `SCRILLS_ECHO_CAP` overrides, 0 = uncapped), but its full representation is retained for `scrills history`.
 
 Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
@@ -61,11 +61,29 @@ A scrill that defines `main()` is also a program: `scrills run <name> [args...]`
 
 Input reaches a scrill four ways: function arguments when imported — the main way; argv and stdin when run as a program (`echo data | scrills run it a b`); environment variables inherited from the caller (secrets travel this way, read at call time); and files, relative to your working directory. The catch: `scrills py`'s stdin already carries the code, so there is none left for data. Pass big data as a file path, never pasted into the snippet; `some-command | scrills py` feeds that output to the compiler — write it to a file first, run the command from inside the Python, or use `scrills run`, which does take stdin.
 
+## Recovering a response
+
+Every admitted `py`/`run` writes stdout and stderr directly to private files. During normal finalization, the same process returns the saved response with `scrills: run <id>` once on stderr first — before it exits, so nested calls preserve their order. Stdout stays byte-clean for pipes. **If a response was truncated or lost, use history instead of repeating expensive work.** No flag to remember:
+
+```bash
+scrills history
+scrills history <id>
+scrills history <id> --offset 8192 --limit 8192
+scrills history <id> --stream stderr
+scrills history <id> --stream stdout --line 20 --lines 10
+```
+
+`history` lists the latest 20 saved invocations across projects. An ID retrieves a bounded page (8,192-byte default, `--limit` 1–65,536), with ranges and a next-byte-offset command. Offsets start at 0; lines start at 1. Line selection cannot combine with `--offset`, and the byte/display bound still applies to giant lines — use the printed byte cursor to continue without skipping a suffix. The default view is stdout followed by stderr, **not** a temporal merge; `--stream stdout|stderr|both` selects the view whose offsets/lines you are reading. Unsafe/non-text bytes are escaped for display; saved bytes are unchanged. History never reruns or imports a scrill, creates a runtime, or records its own reads. Its exit code describes retrieval (0 read, 1 unreadable/corrupt data, 2 usage/unknown ID), not the original program's outcome.
+
+The private files live under `<user home>/.results/<id>/`, independently of registry rotation, and **remain until you remove them**. There is no automatic eviction or saved-output size cap: disk use can grow. Responses include printed secrets and exception messages; no redaction is attempted. Input/code/arguments are not separately recorded, but anything printed is output. History is recovery storage, not permanent application state or Python-object serialization; a library's already-abbreviated `repr()` stays abbreviated.
+
+Capture preparation failure refuses before user code runs. A killed run or failed capture is labelled **incomplete**, never a completed result; available bytes can still be inspected. If termination prevented the ID from being returned, find it with `scrills history`. History cannot finish computation or guarantee survival after a caller timeout. There is no helper process or live forwarding: stdout/stderr are files, so use batch invocations, not interactive prompts or progress-dependent protocols. Normal Python exit handlers, joined threads and buffered native stdio are flushed before returning the response. Unjoined/background writers or interpreter cleanup after that finalization boundary are not promised in the returned snapshot; later writes may appear only in history. Losing delivery does not delete the saved files. Runtime setup/refusals, read verbs, `install`, and bare-python calls are not captured; old unsaved runs cannot be recovered retroactively.
+
 ## Runs are recorded
 
 The shape of a run, start to finish: `py`/`run` registers it and takes a kernel lock held for its lifetime → importing the scrill runs its top-level code → `main()` returns the exit code, or an outcome named in `EXITS` → the record is finalized on exit → `scrills ps` shows it.
 
-Every `py` and `run` leaves a metadata record — verb, name, a unique run id, pid, cwd, timing, exit, who, and which scrills it imported with their versions (each version comes only from README as read when the record is finalized — a declared label, not a guarantee of the exact code the run executed) — never code, arguments, or output. Failures say why: an uncaught exception records its type and where it broke (`error_type`, `error_at` — for a syntax error, where the compiler found it), never its message. A run scrill can name the exits its `main()` chooses — `EXITS = {1: "no answer"}` beside it — and such a run is recorded as an `outcome` carrying that name instead of an `error`. When `TRACEPARENT` is in the environment the run joins that trace and sets its own id for everything it starts, so cron → subagent → a nested `scrills py` reads as one chain; unset, each run starts its own. `scrills ps` is the one place to look: what's running now (held exact by a kernel lock each run keeps for its life), what died (a run that never finished — killed, crashed, power loss — surfaces the first time anything looks), and a summary of the last 24 hours. History is plain JSONL at `~/.scrills/.runs/log.jsonl`, size-capped, inspectable like any file; recording failures never break a run.
+Every `py` and `run` leaves a metadata record — verb, name, a unique run id, pid, cwd, timing, exit, who, and which scrills it imported with their versions (each version comes only from README as read when the record is finalized — a declared label, not a guarantee of the exact code the run executed) — never code, arguments, or output. Failures say why: an uncaught exception records its type and where it broke (`error_type`, `error_at` — for a syntax error, where the compiler found it), never its message. A run scrill can name the exits its `main()` chooses — `EXITS = {1: "no answer"}` beside it — and such a run is recorded as an `outcome` carrying that name instead of an `error`. When `TRACEPARENT` is in the environment the run joins that trace and sets its own id for everything it starts, so cron → subagent → a nested `scrills py` reads as one chain; unset, each run starts its own. `scrills ps` is the one place to look: what's running now (held exact by a kernel lock each run keeps for its life), what died (a run that never finished — killed, crashed, power loss — surfaces the first time anything looks), and a summary of the last 24 hours. The metadata registry is plain JSONL at `~/.scrills/.runs/log.jsonl`, size-capped, inspectable like any file; registry failures never break a run. Saved responses live separately and remain recoverable even when a registry write fails.
 
 Attribution is one convention: export `SCRILLS_WHO=<harness>:<session>` (a harness extension, a cron line) and runs carry it; unset, they record `tty` or `unknown`.
 
@@ -78,9 +96,11 @@ When logic proves useful beyond the moment, save it as a scrill: a folder in the
   emails/
     README.md        human/agent manual and the only metadata source
     __init__.py      entry code; its docstring guides API use and further reading
-    helper.py        optional siblings
-    references/      optional extra material: docs read on demand, deeper modules
-    templates.json   anything else it needs beyond the two required files
+    lib/
+      api.py         implementation, mapped from the entry docstring
+    references/      docs read on demand, deeper modules
+    assets/
+      templates.json data owned by this scrill
 ```
 
 `README.md` opens with Skills-style frontmatter, then the shared instructions:
@@ -104,8 +124,8 @@ The IMAP quirks are in references/imap.md.
 - **Frontmatter is a restricted, line-oriented format, not full YAML.** Consumed fields (`name`, `description`, `version`, `compatibility`) take one-line text; only direct `metadata.version` is read nested. Use spaces for indentation. Comments are recognized outside quoted values; blanks/comments never hide a continuation. Single quotes support doubled apostrophes; double quotes support JSON-style escapes, but no decoded newlines/control characters. Block scalars, structured values, tags/anchors/aliases and unsupported quoting are diagnosed, never partially read. Unknown fields are not consumed. Quote descriptions containing punctuation such as the run line.
 - Optional `compatibility:` — one free-text line for what the scrill needs around it (a harness, a platform, a binary on PATH); the skills spec's own key, parsed like any frontmatter line. The description still carries the short form — it's all the listing shows.
 - The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). README covers shared instructions; the entry docstring guides API choice, sequencing and further reading. Every `.py` opens with a docstring explaining what it holds; function docstrings describe the callable contracts. Longer material goes in linked `references/*.md`, relative to the scrill's folder.
-- **Keep the entry reviewable** — roughly 100–200 lines is a soft target, not a gate. Move substantial implementation into cohesive sibling modules, use ordinary relative imports and explicit exports, and name those files in the entry docstring. Keep trivial scrills trivial: do not fragment a 30-line utility just to meet a pattern. Small entries still import code that needs review; avoid duplicated instructions and version stamps.
-- **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: scrills never captures it, the run log never records it. Real work lives in functions or `main()`.
+- **Keep the entry reviewable** — roughly 100–200 lines is a soft target, not a gate. Keep only README and the entry as root files; put other code, docs, tests and assets in meaningful subfolders. This is authoring guidance, not a validity gate — existing flat scrills still work. No prescribed `_impl` name or empty nested `__init__.py` is needed; Python namespace subfolders work. Use ordinary relative imports and explicit exports, and map the implementation files in the entry docstring. Keep trivial scrills trivial: do not fragment a 30-line utility just to meet a pattern. Small entries still import code that needs review; avoid duplicated instructions and version stamps.
+- **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: CLI runs retain it in response history, never in the metadata run log. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.
 - **Detached children lose the project layer.** The project layer belongs to your caller's cwd, exactly like the working directory. A child you spawn from a state folder resolves no project scrills — capture the caller's cwd at call time and pass it as the child's `cwd=`; any subdirectory of the project works, the walk-up does the rest.
 - State that survives between runs goes under `~/.scrills/.state/<name>/` (`$SCRILLS_HOME`-aware) — the scrill's own name, its own folder, never another's.
@@ -116,7 +136,7 @@ The IMAP quirks are in references/imap.md.
 Imports inside a scrill, nothing special:
 
 ```python
-from .helper import parse        # a sibling in this folder
+from .lib.api import parse       # implementation in a subfolder
 from .references import ocr      # a module under references/ (top-level rule applies there too)
 from scrills import media        # another scrill
 import httpx                     # third-party, from the shared environment
@@ -150,7 +170,7 @@ Move the manual and its metadata into `README.md`; keep agent-facing API and imp
 
 A scrill itself has no lifetime: it is a folder of files, not a process — nothing runs between calls, there is nothing to start, stop, or reload, and an edit is live on the next call.
 
-A scrill run is an ordinary process: the command *is* the run — no wrapper, daemon, or supervisor — so its lifetime belongs to whatever started it. In a terminal it ends when you interrupt it; under an agent it lives in the harness's process tree, and what the harness does at session end is the harness's business; under cron or launchd it runs on the scheduler's clock, independent of any session. Scrills never kills, detaches, or supervises a run — it only records it. Work that must outlive its starter needs a starter that outlives the session (Scheduled work, below). A child a run spawns in the background is a plain process of its own: the run ends, the child continues, and scrills doesn't track it unless the scrill does.
+A scrill run is an ordinary process: the command *is* the run — no wrapper, daemon, or supervisor — so its lifetime belongs to whatever started it. In a terminal it ends when you interrupt it; under an agent it lives in the harness's process tree, and what the harness does at session end is the harness's business; under cron or launchd it runs on the scheduler's clock, independent of any session. Scrills never kills, detaches, or supervises a run — it records execution metadata and retains its response. Work that must outlive its starter needs a starter that outlives the session (Scheduled work, below). A child a run spawns in the background is a plain process of its own: the run ends, the child continues, and scrills doesn't track it unless the scrill does.
 
 ## Scheduled work
 
@@ -178,4 +198,4 @@ pip behind it, arguments pass through (`-U`, `==` pins, `-r`); `scrills where` s
 
 ## Secrets
 
-Read a secret from the environment inside a function, at call time. Don't hardcode it in a scrill, and don't print it — heredoc code passes through the transcript like any other command.
+Read a secret from the environment inside a function, at call time. Don't hardcode it in a scrill, and don't print it — heredoc code passes through the transcript, and printed secrets also persist in response history.

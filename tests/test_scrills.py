@@ -932,7 +932,7 @@ def test_echo_cap_default(home, project):
     assert result.returncode == 0
     assert len(result.stdout) < 9000
     assert "… (+" in result.stdout
-    assert "print it or write it to a file" in result.stdout
+    assert "recover with scrills history" in result.stdout
 
 
 def test_echo_cap_env(home, project):
@@ -2343,12 +2343,12 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
 
 @pytest.mark.parametrize(
     "missing",
-    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/SKILL.md"],
+    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "scrills/SKILL.md"],
 )
 def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
     repo = Path(CLI).resolve().parent.parent.parent
     clone = tmp_path / missing.replace("/", "-")
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/SKILL.md"):
+    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
@@ -2573,7 +2573,7 @@ def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
 def test_boot_and_resolver_are_real_parseable_files():
     # the boot and the resolver source live as real files beside the CLI: they must compile,
     # under the 3.9 grammar too (a stock launcher may be old, and the venv may have been built by one)
-    for name in ("_boot.py", "_scrills_pth.py", "_manifest.py"):
+    for name in ("_boot.py", "_scrills_pth.py", "_manifest.py", "_history.py"):
         source = (Path(CLI).parent / name).read_text()
         ast.parse(source, filename=name)
         ast.parse(source, filename=name, feature_version=(3, 9))
