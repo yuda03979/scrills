@@ -50,7 +50,7 @@ scrills list
 
 `list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. A fresh installation reports that there are no scrills yet; the next section adds the first one. Before using an existing scrill, `scrills read <name>` prints the full README and entry source from the winning layer without importing it. Follow relevant implementation imports and references before executing; a short facade is not a complete review.
 
-`scrills py` behaves like a disposable REPL: the final response is returned after execution, the trailing expression echoes (display truncated past 8,192 characters; recover the full representation with `scrills history`), top level may `await`, and Python variables do not persist between calls. Responses are saved automatically. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
+`scrills py` behaves like a disposable REPL: the final response is returned after execution, the trailing expression echoes (capped at 8,192 characters; `SCRILLS_ECHO_CAP=0` uncaps it), top level may `await`, and Python variables do not persist between calls. History saves that same output, not an uncapped alternative. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
 ## Write your first scrill
 
@@ -144,46 +144,32 @@ The `_` prefix keeps the half-copied folder invisible while it lands (drafts don
 
 ## Recover a response without rerunning
 
-Every admitted `py` and `run` saves its stdout and stderr automatically, then returns the final
-response before exiting. One `scrills: run <id>` line appears on stderr first, leaving stdout
-clean for pipes. There is no opt-in flag, live-output mode or asynchronous response helper.
-If the harness truncates or loses a response, recover it rather than repeat expensive work:
+`py`/`run` saves ordinary stdout/stderr automatically, returns it synchronously before exiting,
+and prints `scrills: run <id>` on stderr first. Recover through the CLI, not storage paths:
 
 ```bash
-scrills history
-scrills history <id>
+scrills history                         # latest 20 IDs, newest directory first
+scrills history <id>                    # stdout, first 8192 bytes
 scrills history <id> --offset 8192 --limit 8192
 scrills history <id> --stream stderr
-scrills history <id> --stream stdout --line 20 --lines 10
 ```
 
-The listing shows the latest 20 saved invocations across projects. Pages default to an 8,192-byte
-budget (`--limit` accepts 1–65,536), with ranges and a next-offset command. Byte offsets start at
-0; line numbers start at 1. Line selection and `--offset` are mutually exclusive, but the byte
-limit still protects against giant lines: follow the printed byte cursor to recover a suffix.
-`--stream stdout|stderr|both` chooses the view; `both` is stdout followed by stderr, not temporal
-order. Non-text/control bytes are escaped for display without changing the saved bytes. History
-needs neither a venv nor the original scrill and never executes code or records its own reads.
-Retrieving a failed invocation is still a successful history read.
+`--offset` is zero-based bytes; `--limit` accepts 1–65,536. Each stream has its own offsets.
+The selected raw bytes go to stdout; a next-offset command goes to stderr when more remain.
+There is no line mode, combined stream, formatting or metadata. Reading never reruns code or
+needs a venv. It returns 0 for a successful read, 1 for unreadable output, 2 for usage/unknown ID.
+History does not undo the trailing-echo cap; print or write a full value when that is needed.
 
-Storage is private under `~/.scrills/.results/<id>/` (or `$SCRILLS_HOME`), independent of the
-rotating run registry. Responses remain until you remove them with normal file tools. There is
-no automatic eviction or saved-output size cap; disk use can grow. These files contain stdout
-and stderr, including printed secrets and exception messages, without redaction. No snippet,
-stdin or argv is separately recorded, but printing any of them makes them saved output.
+If capture setup fails, scrills warns and runs normally without saving. Interrupted runs may
+leave partial output and no returned ID; `history` finds IDs, while `ps` describes execution.
+History does not certify completion or keep a job alive. Saved files under the user library's
+`.results/` remain until removed: no automatic eviction, redaction or disk-size cap. Existing
+output stays readable; old metadata is ignored. Reads, setup/refusals and `install` are not saved.
 
-A killed run or failed capture is marked incomplete; available partial output may be inspected,
-never mistaken for completion. If no ID was returned, use the history listing to find it. A caller
-timeout can still kill the computation: history is recovery, not detachment. Setup/refusals, read
-verbs, `install`, bare-python invocations and old unsaved runs have no response archive.
-
-Output is redirected directly to files and returned synchronously from the existing finalization
-path, after Python exit handlers, joined threads and buffered native stdio have been flushed.
-Nested commands cannot finish before returning their response, so inner output precedes outer
-output. There is no extra process or copy thread. This is for batch work: interactive prompts,
-live progress and terminal-sensitive protocols are not supported. Unjoined/background writers or
-interpreter cleanup after that finalization boundary are outside the returned-snapshot guarantee;
-later bytes may appear only in history. Delivery failure never deletes the saved response.
+Capture is for batch work, not interactive prompts or live progress. Normal exit handlers,
+joined threads and native stdio are flushed before return. Output from unjoined/background
+writers or later interpreter cleanup is outside the returned-snapshot guarantee. Losing the
+caller does not delete already saved output.
 
 ## See what ran
 

@@ -932,7 +932,7 @@ def test_echo_cap_default(home, project):
     assert result.returncode == 0
     assert len(result.stdout) < 9000
     assert "… (+" in result.stdout
-    assert "recover with scrills history" in result.stdout
+    assert "print it or write it to a file" in result.stdout
 
 
 def test_echo_cap_env(home, project):

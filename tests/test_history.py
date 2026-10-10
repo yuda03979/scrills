@@ -1,4 +1,4 @@
-"""Response retention and recovery through the real CLI, with no paid or external work."""
+"""Saved output and ID-based retrieval through the real CLI; no external or paid work."""
 import json
 import os
 import re
@@ -30,52 +30,29 @@ def result_dir(home, ident):
     return Path(home) / ".results" / ident
 
 
-def metadata(home, ident):
-    return json.loads((result_dir(home, ident) / "meta.json").read_text())
-
-
 def id_for_pid(home, pid):
-    matches = [path.parent.name for path in (Path(home) / ".results").glob("*/meta.json")
-               if json.loads(path.read_text()).get("pid") == pid]
-    assert len(matches) == 1
-    return matches[0]
+    return json.loads((Path(home) / ".runs" / f"{pid}.json").read_text())["id"]
 
 
-def test_automatic_response_and_identity(home, project):
+def test_automatic_output_only_storage(home, project):
     result = scrills(["py"], home, project, stdin="import sys\nprint('answer')\nprint('diagnostic', file=sys.stderr)\n42")
-    assert result.returncode == 0
-    assert result.stdout == "answer\n42\n"
+    assert result.returncode == 0 and result.stdout == "answer\n42\n"
     ident = run_id(result)
-    assert result.stderr.startswith(f"scrills: run {ident}\n")
+    assert ident == log_records(home, "py")[-1]["id"]
+    assert result.stderr == f"scrills: run {ident}\ndiagnostic\n"
     folder = result_dir(home, ident)
+    assert sorted(path.name for path in folder.iterdir()) == ["stderr", "stdout"]
     assert (folder / "stdout").read_bytes() == b"answer\n42\n"
     assert (folder / "stderr").read_bytes() == b"diagnostic\n"
-    meta = metadata(home, ident)
-    assert meta["id"] == log_records(home, "py")[-1]["id"] == ident
-    assert meta["complete"] is True
-    assert meta["status"] == "ok" and meta["exit"] == 0
-    assert meta["cwd"] == str(project)
-    assert "code" not in meta and "argv" not in meta
-    for path in (Path(home) / ".results", folder):
-        assert path.stat().st_mode & 0o077 == 0
-    for path in folder.iterdir():
+    for path in (Path(home) / ".results", folder, *folder.iterdir()):
         assert path.stat().st_mode & 0o077 == 0
     assert (Path(home) / ".results" / ".gitignore").read_text() == "*\n"
 
 
-def test_closing_both_streams_early_still_records_completion(home, project):
+def test_closing_both_streams_early_still_returns(home, project):
     result = scrills(["py"], home, project, stdin="import os, time\nos.close(1)\nos.close(2)\ntime.sleep(.2)")
     assert result.returncode == 0
-    assert metadata(home, run_id(result))["complete"] is True
-
-
-def test_single_byte_binary_page_always_advances(home, project):
-    result = scrills(["py"], home, project, stdin="import os\nos.write(1, b'\\x00')\npass")
-    ident = run_id(result)
-    shown = scrills(["history", ident, "--limit", "1"], home, project)
-    assert shown.returncode == 0
-    assert "\\x00" in shown.stdout
-    assert "--offset 0" not in shown.stdout
+    assert (result_dir(home, run_id(result)) / "stdout").read_bytes() == b""
 
 
 def test_repr_output_precedes_the_capped_value(home, project):
@@ -83,129 +60,113 @@ def test_repr_output_precedes_the_capped_value(home, project):
     result = scrills(["py"], home, project, stdin=code, extra_env={"SCRILLS_ECHO_CAP": "50"})
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith("repr side effect\n")
-    assert (result_dir(home, run_id(result)) / "stdout").read_text() == "repr side effect\n" + "x" * 20000 + "\n"
+    assert (result_dir(home, run_id(result)) / "stdout").read_text() == result.stdout
 
 
-def test_full_echo_is_retained_before_display_cap(home, project):
-    result = scrills(["py"], home, project, stdin="print('prefix')\n'x' * 20000")
+@pytest.mark.parametrize("cap", ["50", "0"])
+def test_saved_echo_is_exactly_the_delivered_echo(home, project, cap):
+    result = scrills(["py"], home, project, stdin="print('prefix')\n'x' * 20000",
+                     extra_env={"SCRILLS_ECHO_CAP": cap})
     assert result.returncode == 0
-    assert len(result.stdout) < 9000 and "… (+" in result.stdout
     saved = (result_dir(home, run_id(result)) / "stdout").read_text()
-    assert saved == "prefix\n'" + "x" * 20000 + "'\n"
-    assert "… (+" not in saved
+    assert saved == result.stdout
+    assert ("… (+" in saved) == (cap != "0")
+    assert "recover with scrills history" not in saved
 
 
-def test_capture_includes_descriptors_children_and_binary(home, project):
+def test_capture_and_retrieval_preserve_raw_bytes_and_children(home, project):
     code = "import os, subprocess, sys\nos.write(1, b'\\x00\\xffFD\\n')\nsubprocess.run([sys.executable, '-I', '-c', \"import os; os.write(1,b'child\\\\n'); os.write(2,b'child-error\\\\n')\"], check=True)\npass"
-    result = subprocess.run([sys.executable, CLI, "py"], input=code.encode(), cwd=project,
-                            env={**base_env(), "SCRILLS_HOME": str(home)}, capture_output=True)
+    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    result = subprocess.run([sys.executable, CLI, "py"], input=code.encode(), cwd=project, env=env, capture_output=True)
     assert result.returncode == 0, result.stderr
     ident = re.search(rb"scrills: run ([0-9a-f]{16})", result.stderr).group(1).decode()
     folder = result_dir(home, ident)
     assert result.stdout == (folder / "stdout").read_bytes() == b"\x00\xffFD\nchild\n"
     assert (folder / "stderr").read_bytes() == b"child-error\n"
-    shown = scrills(["history", ident], home, project)
-    assert shown.returncode == 0
-    assert "\\x00" in shown.stdout and "\\xff" in shown.stdout
-    assert "\x00" not in shown.stdout
+    for offset, expected in ((0, b"\x00"), (1, b"\xff")):
+        page = subprocess.run([sys.executable, CLI, "history", ident, "--offset", str(offset), "--limit", "1"],
+                              env=env, cwd=project, capture_output=True, timeout=10)
+        assert page.returncode == 0 and page.stdout == expected
+        assert f"--offset {offset + 1}".encode() in page.stderr
+        assert str(folder).encode() not in page.stdout + page.stderr
 
 
-def test_history_lists_and_reads_without_execution_or_registry(home, project):
+def test_history_lists_ids_and_reads_without_registry_writes(home, project):
     result = scrills(["py"], home, project, stdin="print('kept')")
     ident = run_id(result)
     log = Path(home) / ".runs" / "log.jsonl"
     before = log.read_bytes()
     listing = scrills(["history"], home, project)
-    assert listing.returncode == 0 and ident in listing.stdout
+    assert listing.returncode == 0 and ident in listing.stdout.splitlines()
+    assert all(re.fullmatch(r"[0-9a-f]{16}", line) for line in listing.stdout.splitlines())
     reading = scrills(["history", ident], home, project)
-    assert reading.returncode == 0 and "kept" in reading.stdout
-    assert "scrills: run " not in reading.stderr
+    assert reading.returncode == 0 and reading.stdout == "kept\n"
+    assert str(result_dir(home, ident)) not in reading.stdout + reading.stderr
     assert log.read_bytes() == before
-    assert "stdout" in reading.stdout and "stderr" in reading.stdout
-    assert str(result_dir(home, ident)) not in reading.stdout
 
 
-def test_history_orders_runs_with_subsecond_timestamps(home, project):
-    first = run_id(scrills(["py"], home, project, stdin="pass"))
-    second = run_id(scrills(["py"], home, project, stdin="pass"))
-    for ident in (first, second):
-        assert re.search(r"T\d\d:\d\d:\d\d\.\d{6}", metadata(home, ident)["started"])
-    listing = scrills(["history"], home, project)
-    assert listing.stdout.index(second) < listing.stdout.index(first)
+def test_history_byte_pages_are_independent_per_stream(home, project):
+    result = scrills(["py"], home, project, stdin="import sys\nprint('alpha\\nbeta\\ngamma')\nprint('problem', file=sys.stderr)")
+    ident = run_id(result)
+    page = scrills(["history", ident, "--offset", "6", "--limit", "5"], home, project)
+    assert page.returncode == 0 and page.stdout == "beta\n"
+    assert f"history {ident} --stream stdout --offset 11 --limit 5" in page.stderr
+    err = scrills(["history", ident, "--stream", "stderr", "--offset", "1", "--limit", "3"], home, project)
+    assert err.returncode == 0 and err.stdout == "rob"
+    assert "--stream stderr --offset 4 --limit 3" in err.stderr
+    end = scrills(["history", ident, "--offset", "11"], home, project)
+    assert end.returncode == 0 and end.stdout == "gamma\n" and "next:" not in end.stderr
+    beyond = scrills(["history", ident, "--offset", "100"], home, project)
+    assert beyond.returncode == 0 and beyond.stdout == ""
 
 
-def test_history_order_uses_instants_not_timezone_spelling(tmp_path):
-    home = tmp_path / "home"
-    for ident, started in (("a" * 16, "2026-01-01T10:00:00+03:00"), ("b" * 16, "2026-01-01T09:00:00+00:00")):
-        folder = result_dir(home, ident)
-        folder.mkdir(parents=True)
-        (folder / "meta.json").write_text(json.dumps({"id": ident, "started": started}))
-    listing = scrills(["history"], home, tmp_path)
-    assert listing.returncode == 0
-    assert listing.stdout.index("b" * 16) < listing.stdout.index("a" * 16)
+def test_history_default_read_is_bounded(home, project):
+    result = scrills(["py"], home, project, stdin="print('x' * 100000)")
+    ident = run_id(result)
+    page = scrills(["history", ident], home, project)
+    assert page.returncode == 0 and page.stdout == "x" * 8192
+    assert "--offset 8192" in page.stderr
+    larger = scrills(["history", ident, "--limit", "65536"], home, project)
+    assert larger.returncode == 0 and larger.stdout == "x" * 65536
 
 
-def test_history_does_not_need_runtime_or_original_scrill(tmp_path):
+def test_history_ignores_old_metadata_and_needs_no_runtime(tmp_path):
     home = tmp_path / "home"
     ident = "a" * 16
     folder = result_dir(home, ident)
     folder.mkdir(parents=True)
-    (folder / "meta.json").write_text(json.dumps({"id": ident, "name": "gone", "verb": "run", "complete": True, "status": "ok", "exit": 0, "started": "2026-01-01T00:00:00+00:00", "cwd": "/gone"}))
+    (folder / "meta.json").write_text("old metadata is not even valid JSON")
     (folder / "stdout").write_bytes(b"old answer\n")
     (folder / "stderr").write_bytes(b"")
-    # Even an executable but hostile venv must not be relaunched by history.
     python = home / ".venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\necho WRONG-RUNTIME >&2\nexit 99\n")
     python.chmod(0o755)
+    before = {path.name: path.read_bytes() for path in folder.iterdir()}
     result = scrills(["history", ident], home, tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert "old answer" in result.stdout
+    assert result.returncode == 0 and result.stdout == "old answer\n", result.stderr
     assert "WRONG-RUNTIME" not in result.stderr
+    assert scrills(["history"], home, tmp_path).stdout == ident + "\n"
     assert not (home / ".runs").exists()
+    assert before == {path.name: path.read_bytes() for path in folder.iterdir()}
 
 
-def test_byte_and_line_pagination(home, project):
-    result = scrills(["py"], home, project, stdin="import sys\nsys.stdout.write('alpha\\nbeta\\ngamma\\n')\nsys.stderr.write('problem\\n')\npass")
-    ident = run_id(result)
-    page = scrills(["history", ident, "--stream", "stdout", "--offset", "6", "--limit", "5"], home, project)
-    assert page.returncode == 0
-    assert "beta\n" in page.stdout and "alpha\n" not in page.stdout and "gamma\n" not in page.stdout
-    assert "--offset 11" in page.stdout
-    line = scrills(["history", ident, "--stream", "stdout", "--line", "2", "--lines", "1"], home, project)
-    assert line.returncode == 0
-    assert "beta\n" in line.stdout and "gamma\n" not in line.stdout
-    err = scrills(["history", ident, "--stream", "stderr"], home, project)
-    assert err.returncode == 0 and "problem" in err.stdout and "alpha\n" not in err.stdout
-    combined = scrills(["history", ident, "--offset", "17", "--limit", "8"], home, project)
-    assert combined.returncode == 0 and "problem" in combined.stdout
-
-
-def test_huge_line_remains_bounded_and_has_a_byte_cursor(home, project):
-    result = scrills(["py"], home, project, stdin="import sys\nsys.stdout.write('z' * 100000 + '\\nlast\\n')\npass")
-    ident = run_id(result)
-    page = scrills(["history", ident, "--line", "1", "--lines", "1", "--limit", "123"], home, project)
-    assert page.returncode == 0
-    assert "z" * 123 in page.stdout and "z" * 124 not in page.stdout
-    assert "--offset 123" in page.stdout
-    assert len(page.stdout) < 2000
-    last = scrills(["history", ident, "--line", "2", "--lines", "1"], home, project)
-    assert last.returncode == 0 and "last\n" in last.stdout
+@pytest.mark.parametrize("args", [["--line", "1"], ["--lines", "1"], ["--stream", "both"]])
+def test_history_has_no_line_or_combined_stream_modes(home, project, args):
+    ident = run_id(scrills(["py"], home, project, stdin="print('saved')"))
+    result = scrills(["history", ident, *args], home, project)
+    assert result.returncode == 2 and "usage:" in result.stderr
 
 
 @pytest.mark.parametrize("args", [
-    ["../escape"], ["f" * 16], ["--bogus"], ["a" * 16, "--offset", "-1"],
-    ["a" * 16, "--limit", "0"], ["a" * 16, "--limit", "65537"],
-    ["a" * 16, "--line", "0"], ["a" * 16, "--lines", "0"],
-    ["a" * 16, "--offset", "0", "--line", "1"],
-    ["a" * 16, "--stream", "wat"], ["a" * 16, "extra"],
+    ["../escape"], ["f" * 16], ["--bogus"], ["a" * 16, "extra"], ["--offset", "0"],
+    ["a" * 16, "--offset", "-1"], ["a" * 16, "--limit", "0"], ["a" * 16, "--limit", "65537"],
 ])
 def test_history_usage_never_creates_a_runtime(tmp_path, args):
     home = tmp_path / "none"
     result = scrills(["history", *args], home, tmp_path)
     assert result.returncode == 2, result.stderr
-    assert "Traceback" not in result.stderr
-    assert not home.exists()
+    assert "Traceback" not in result.stderr and not home.exists()
 
 
 def test_empty_history_is_read_only(tmp_path):
@@ -215,23 +176,21 @@ def test_empty_history_is_read_only(tmp_path):
     assert not home.exists()
 
 
-def test_failed_run_response_is_retrievable(home, project):
+def test_failed_run_output_is_retrievable(home, project):
     result = scrills(["py"], home, project, stdin="print('before')\nraise ValueError('detail')")
     assert result.returncode == 1
     ident = run_id(result)
-    meta = metadata(home, ident)
-    assert meta["complete"] is True and meta["status"] == "error"
-    assert "ValueError: detail" in (result_dir(home, ident) / "stderr").read_text()
-    response = scrills(["history", ident], home, project)
+    response = scrills(["history", ident, "--stream", "stderr"], home, project)
     assert response.returncode == 0
-    assert "before" in response.stdout and "ValueError: detail" in response.stdout
+    assert response.stdout == (result_dir(home, ident) / "stderr").read_text()
+    assert "ValueError: detail" in response.stdout
+    assert scrills(["history", ident], home, project).stdout == "before\n"
 
 
 def test_exit_handlers_and_threads_are_in_the_response(home, project):
     source = "import atexit, threading, time\natexit.register(lambda: print('at-exit'))\nthreading.Thread(target=lambda: (time.sleep(.15), print('thread'))).start()\nprint('body')"
     result = scrills(["py"], home, project, stdin=source)
-    assert result.returncode == 0
-    assert result.stdout == "body\nthread\nat-exit\n"
+    assert result.returncode == 0 and result.stdout == "body\nthread\nat-exit\n"
     assert (result_dir(home, run_id(result)) / "stdout").read_text() == result.stdout
 
 
@@ -246,9 +205,7 @@ def test_history_survives_registry_append_failure(home, project):
         log.rmdir()
         aside.rename(log)
     assert result.returncode == 0
-    ident = run_id(result)
-    assert metadata(home, ident)["complete"] is True
-    assert "independent" in scrills(["history", ident], home, project).stdout
+    assert scrills(["history", run_id(result)], home, project).stdout == "independent\n"
 
 
 def test_history_survives_registry_registration_failure(home, project):
@@ -260,34 +217,62 @@ def test_history_survives_registry_registration_failure(home, project):
     finally:
         runs.chmod(mode)
     assert result.returncode == 0, result.stderr
-    ident = run_id(result)
-    assert metadata(home, ident)["complete"] is True
-    assert (result_dir(home, ident) / "stdout").read_text() == "no-card\n"
+    assert (result_dir(home, run_id(result)) / "stdout").read_text() == "no-card\n"
 
 
-def test_storage_setup_failure_precedes_user_code(home, project):
-    # Use a separate directory obstruction so the shared home's other results survive.
+@pytest.mark.parametrize("verb", ["py", "run"])
+def test_storage_setup_failure_warns_and_runs_normally(home, project, verb):
     root = Path(home) / ".results"
     aside = root.with_name(".results-aside")
-    if root.exists():
-        root.rename(aside)
+    root.rename(aside)
     root.write_text("obstruction")
-    sentinel = project / "must-not-run"
+    sentinel = project / "executed"
+    source = f"import sys\nfrom pathlib import Path\nPath({str(sentinel)!r}).touch()\nprint('ran once')\nprint('diagnostic', file=sys.stderr)\nsys.exit(7)"
+    write_scrill(project / ".scrills", "fallback", "Fallback fixture.", f"def main():\n    exec({source!r})")
     try:
-        result = scrills(["py"], home, project, stdin=f"from pathlib import Path\nPath({str(sentinel)!r}).touch()")
+        result = scrills([verb, *(["fallback"] if verb == "run" else [])], home, project, stdin=source)
     finally:
         root.unlink()
-        if aside.exists():
-            aside.rename(root)
-    assert result.returncode == 1
-    assert "history" in result.stderr.lower()
-    assert not sentinel.exists()
+        aside.rename(root)
+    assert result.returncode == 7, result.stderr
+    assert result.stdout == "ran once\n" and sentinel.exists()
+    assert "running without saved output" in result.stderr
+    assert "diagnostic" in result.stderr and "scrills: run " not in result.stderr
+    assert log_records(home, "py" if verb == "py" else "fallback")[-1]["exit"] == 7
+
+
+def test_partial_redirection_failure_restores_caller_streams(home, project):
+    source = f"""
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader('cli', {CLI!r})
+core = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(core)
+original = os.dup2
+calls = 0
+def fail_second(*args):
+    global calls
+    calls += 1
+    if calls == 2:
+        raise OSError('injected stderr redirection failure')
+    return original(*args)
+os.dup2 = fail_second
+sys.argv = [{CLI!r}, 'py']
+core.main()
+"""
+    before = set((Path(home) / ".results").iterdir())
+    result = subprocess.run([str(Path(home) / ".venv/bin/python"), "-I", "-c", source],
+                            input="import sys\nprint('out')\nprint('err', file=sys.stderr)\nsys.exit(7)",
+                            env={**base_env(), "SCRILLS_HOME": str(home)}, cwd=project,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 7, result.stderr
+    assert result.stdout == "out\n" and result.stderr.endswith("err\n")
+    assert "running without saved output" in result.stderr and "scrills: run " not in result.stderr
+    assert set((Path(home) / ".results").iterdir()) == before
 
 
 @pytest.mark.parametrize("shape", ["symlink", "fifo", "directory", "missing"])
 def test_history_rejects_non_regular_streams(home, project, shape):
-    result = scrills(["py"], home, project, stdin="print('answer')")
-    ident = run_id(result)
+    ident = run_id(scrills(["py"], home, project, stdin="print('answer')"))
     path = result_dir(home, ident) / "stdout"
     path.unlink()
     if shape == "symlink":
@@ -300,11 +285,11 @@ def test_history_rejects_non_regular_streams(home, project, shape):
         path.mkdir()
     reading = scrills(["history", ident], home, project)
     assert reading.returncode == 1
-    assert "Traceback" not in reading.stderr
+    assert "Traceback" not in reading.stderr and str(path) not in reading.stderr
     assert "DO-NOT-FOLLOW" not in reading.stdout
 
 
-def test_sigkill_has_only_incomplete_output(home, project):
+def test_sigkill_leaves_available_bytes_without_a_completion_claim(home, project):
     ready = project / "ready"
     code = f"import pathlib, time\nprint('started', flush=True)\npathlib.Path({str(ready)!r}).touch()\ntime.sleep(60)"
     child = subprocess.Popen([sys.executable, CLI, "py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -323,13 +308,11 @@ def test_sigkill_has_only_incomplete_output(home, project):
         if child.poll() is None:
             child.kill()
             child.wait()
-    assert child.returncode == -signal.SIGKILL
+    assert child.returncode == -signal.SIGKILL and out == err == ""
     ident = id_for_pid(home, child.pid)
-    assert out == "" and err == "", "SIGKILL has no finalization response; discover its ID through history"
-    assert metadata(home, ident)["complete"] is False
+    assert ident in scrills(["history"], home, project).stdout.splitlines()
     shown = scrills(["history", ident], home, project)
-    assert shown.returncode == 0 and "incomplete" in shown.stdout
-    assert "started" in shown.stdout
+    assert shown.returncode == 0 and shown.stdout == "started\n"
     scrills(["ps"], home, project)
     assert not (Path(home) / ".runs" / f"{child.pid}.json").exists()
 
@@ -337,25 +320,18 @@ def test_sigkill_has_only_incomplete_output(home, project):
 def test_run_outcomes_and_arguments_stay_native(home, project):
     write_scrill(project / ".scrills", "historical", "Historical fixture.", "import sys\nEXITS = {7: 'declined'}\ndef main():\n    print(sys.stdin.read().strip(), sys.argv[1:])\n    return 7")
     result = scrills(["run", "historical", "--save", "--offset", "8"], home, project, stdin="input")
-    assert result.returncode == 7
-    assert result.stdout == "input ['--save', '--offset', '8']\n"
-    meta = metadata(home, run_id(result))
-    assert meta["status"] == "outcome" and meta["outcome"] == "declined"
-    assert meta["complete"] is True
+    assert result.returncode == 7 and result.stdout == "input ['--save', '--offset', '8']\n"
+    assert log_records(home, "historical")[-1]["outcome"] == "declined"
 
 
-def test_empty_response_and_log_rotation(home, project):
-    result = scrills(["py"], home, project, stdin="pass")
-    ident = run_id(result)
-    folder = result_dir(home, ident)
-    assert (folder / "stdout").read_bytes() == (folder / "stderr").read_bytes() == b""
+def test_empty_response_does_not_depend_on_registry(home, project):
+    ident = run_id(scrills(["py"], home, project, stdin="pass"))
     log = Path(home) / ".runs" / "log.jsonl"
     aside = log.with_name("history-rotation-aside")
     log.rename(aside)
     try:
         shown = scrills(["history", ident], home, project)
-        assert shown.returncode == 0
-        assert "complete" in shown.stdout and "0 bytes" in shown.stdout
+        assert shown.returncode == 0 and shown.stdout == ""
     finally:
         aside.rename(log)
 
@@ -375,40 +351,14 @@ def test_concurrent_runs_have_distinct_responses(home, project):
         ident = re.search(r"scrills: run ([0-9a-f]{16})", err).group(1)
         ids.add(ident)
         assert (result_dir(home, ident) / "stdout").read_text() == out == f"value-{number}\n"
-        assert metadata(home, ident)["complete"] is True
     assert len(ids) == 8
 
 
-def test_only_final_output_is_returned(home, project):
+@pytest.mark.parametrize("write,expected", [("print('first', flush=True)", b"first\ndone\n"),
+                                           ("os.write(1, b'\\x00')", b"\x00done\n")])
+def test_only_final_output_is_returned(home, project, write, expected):
     gate, ready = project / "gate", project / "ready"
-    source = f"import pathlib, time\nprint('first', flush=True)\npathlib.Path({str(ready)!r}).touch()\nwhile not pathlib.Path({str(gate)!r}).exists():\n    time.sleep(.02)\nprint('done')"
-    child = subprocess.Popen([sys.executable, CLI, "py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, cwd=project,
-                             env={**base_env(), "SCRILLS_HOME": str(home)})
-    child.stdin.write(source)
-    child.stdin.close()
-    child.stdin = None
-    try:
-        import select
-        deadline = time.monotonic() + 15
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(.02)
-        assert ready.exists()
-        assert not select.select([child.stdout, child.stderr], [], [], .2)[0]
-        assert child.poll() is None
-        gate.touch()
-        out, err = child.communicate(timeout=15)
-        assert out == "first\ndone\n" and child.returncode == 0, err
-    finally:
-        if child.poll() is None:
-            child.kill()
-            child.communicate(timeout=15)
-        scrills(["ps"], home, project)
-
-
-def test_binary_output_is_returned_only_after_completion(home, project):
-    gate, ready = project / "gate", project / "ready"
-    source = f"import os, pathlib, time\nos.write(1, b'\\x00')\npathlib.Path({str(ready)!r}).touch()\nwhile not pathlib.Path({str(gate)!r}).exists():\n    time.sleep(.02)\npass"
+    source = f"import os, pathlib, time\n{write}\npathlib.Path({str(ready)!r}).touch()\nwhile not pathlib.Path({str(gate)!r}).exists():\n    time.sleep(.02)\nprint('done')"
     child = subprocess.Popen([sys.executable, CLI, "py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, cwd=project,
                              env={**base_env(), "SCRILLS_HOME": str(home)})
@@ -421,10 +371,11 @@ def test_binary_output_is_returned_only_after_completion(home, project):
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(.02)
         assert ready.exists()
-        assert not select.select([child.stdout], [], [], .2)[0]
+        assert not select.select([child.stdout, child.stderr], [], [], .2)[0]
+        assert child.poll() is None
         gate.touch()
-        out, _ = child.communicate(timeout=15)
-        assert child.returncode == 0 and out == b"\x00"
+        out, err = child.communicate(timeout=15)
+        assert out == expected and child.returncode == 0, err
     finally:
         if child.poll() is None:
             child.kill()
@@ -451,7 +402,6 @@ def test_group_signal_keeps_native_exit_and_no_response_hang(home, project, sig)
         out, err = child.communicate(timeout=15)
         assert child.returncode == -sig
         ident = id_for_pid(home, child.pid)
-        assert metadata(home, ident)["complete"] is False
         if sig == signal.SIGINT:
             assert err.count("KeyboardInterrupt") == 1
             assert "KeyboardInterrupt" in (result_dir(home, ident) / "stderr").read_text()
@@ -477,34 +427,17 @@ def test_lost_delivery_does_not_destroy_the_response(home, project):
     assert child.returncode == 0, err
     ident = re.search(r"scrills: run ([0-9a-f]{16})", err).group(1)
     assert (result_dir(home, ident) / "stdout").read_text() == "retained-" * 20000
-    assert metadata(home, ident)["complete"] is True
-    assert metadata(home, ident)["delivery_failed"] == ["stdout"]
 
 
-def test_echo_substitution_preserves_unicode_and_exit_output(home, project):
+def test_saved_echo_matches_unicode_and_exit_output(home, project):
     result = scrills(["py"], home, project, stdin="import atexit\natexit.register(lambda: print('after'))\nprint('before')\n'שלום' * 6000",
                      extra_env={"SCRILLS_ECHO_CAP": "50"})
     assert result.returncode == 0
-    ident = run_id(result)
-    folder = result_dir(home, ident)
-    assert (folder / "stdout").read_text() == "before\n'" + "שלום" * 6000 + "'\nafter\n"
-    assert "\x00" not in result.stdout and "scrills-echo:" not in result.stdout
+    folder = result_dir(home, run_id(result))
+    assert (folder / "stdout").read_text() == result.stdout
+    assert result.stdout.startswith("before\n'") and result.stdout.endswith("after\n")
     assert len(result.stdout) < 300
-    assert sorted(path.name for path in folder.iterdir()) == ["meta.json", "stderr", "stdout"]
-
-
-def test_corrupt_history_is_reported_without_hiding_other_entries(home, project):
-    good = scrills(["py"], home, project, stdin="1")
-    good_id = run_id(good)
-    bad = "e" * 16
-    folder = result_dir(home, bad)
-    folder.mkdir()
-    (folder / "meta.json").write_text("[]")
-    shown = scrills(["history", bad], home, project)
-    assert shown.returncode == 1 and "Traceback" not in shown.stderr
-    listing = scrills(["history"], home, project)
-    assert listing.returncode == 0 and good_id in listing.stdout
-    assert bad in listing.stderr
+    assert sorted(path.name for path in folder.iterdir()) == ["stderr", "stdout"]
 
 
 def test_root_only_layout_is_guidance_not_a_gate(home, project):
@@ -516,41 +449,54 @@ def test_root_only_layout_is_guidance_not_a_gate(home, project):
     assert result.returncode == 0 and result.stdout == "42\n"
 
 
-@pytest.mark.parametrize("missing", ["_history.py"])
-def test_missing_history_helper_fails_before_registration(home, project, missing):
+def test_missing_history_helper_fails_before_registration(home, project):
     import shutil
     scripts = project / "broken-install"
     scripts.mkdir()
     for source in Path(CLI).parent.iterdir():
-        if source.is_file() and source.name != missing:
+        if source.is_file() and source.name != "_history.py":
             shutil.copy2(source, scripts / source.name)
     before = (Path(home) / ".runs" / "log.jsonl").read_bytes()
     result = subprocess.run([sys.executable, str(scripts / "scrills"), "py"], input="print('must not execute')",
                             env={**base_env(), "SCRILLS_HOME": str(home)}, cwd=project,
                             capture_output=True, text=True, timeout=30)
-    assert result.returncode == 1 and missing in result.stderr
+    assert result.returncode == 1 and "_history.py" in result.stderr
     assert "must not execute" not in result.stdout
     assert (Path(home) / ".runs" / "log.jsonl").read_bytes() == before
 
 
-def test_nested_runs_keep_separate_ids_and_response_files(home, project):
+def test_nested_runs_keep_separate_ids_and_ordered_output(home, project):
     source = "import os, subprocess\nsubprocess.run([os.environ['SCRILLS_CLI'], 'py'], input=\"print('inner')\", text=True, check=True)\nprint('outer')"
     result = scrills(["py"], home, project, stdin=source)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0 and result.stdout == "inner\nouter\n", result.stderr
     ids = re.findall(r"^scrills: run ([0-9a-f]{16})$", result.stderr, re.M)
     assert len(ids) == 2 and ids[0] != ids[1]
-    assert (result_dir(home, ids[0]) / "stdout").read_text() == "inner\nouter\n"
+    assert (result_dir(home, ids[0]) / "stdout").read_text() == result.stdout
     assert (result_dir(home, ids[1]) / "stdout").read_text() == "inner\n"
-    assert metadata(home, ids[1])["parent"] == ids[0]
-    assert all(metadata(home, ident)["complete"] is True for ident in ids)
+    assert next(record for record in log_records(home, "py") if record.get("id") == ids[1])["parent"] == ids[0]
 
 
 def test_native_stdio_buffer_is_flushed_before_response_return(home, project):
     source = "import ctypes\nlibc = ctypes.CDLL(None)\nlibc.printf(b'late C stdout\\n')\npass"
     result = scrills(["py"], home, project, stdin=source)
-    assert result.returncode == 0
-    assert result.stdout == "late C stdout\n"
+    assert result.returncode == 0 and result.stdout == "late C stdout\n"
     assert (result_dir(home, run_id(result)) / "stdout").read_bytes() == b"late C stdout\n"
+
+
+def test_history_last_twenty_uses_file_times_and_never_deletes(tmp_path):
+    home = tmp_path / "home"
+    for number in range(21):
+        folder = result_dir(home, f"{number:016x}")
+        folder.mkdir(parents=True)
+        (folder / "stdout").write_text("older response\n")
+        (folder / "stderr").touch()
+        os.utime(folder, (number + 1, number + 1))
+    listing = scrills(["history"], home, tmp_path)
+    assert listing.returncode == 0
+    assert listing.stdout.splitlines() == [f"{number:016x}" for number in range(20, 0, -1)]
+    oldest = scrills(["history", "0" * 16], home, tmp_path)
+    assert oldest.returncode == 0 and oldest.stdout == "older response\n"
+    assert len(list((home / ".results").iterdir())) == 21
 
 
 def test_echo_respects_deliberate_stdout_redirection(home, project):
@@ -559,5 +505,5 @@ def test_echo_respects_deliberate_stdout_redirection(home, project):
     result = scrills(["py"], home, project, stdin=code, extra_env={"SCRILLS_ECHO_CAP": "50"})
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    assert "recover with scrills history" in target.read_text()
+    assert "print it or write it to a file" in target.read_text()
     assert (result_dir(home, run_id(result)) / "stdout").read_bytes() == b""

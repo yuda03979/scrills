@@ -10,7 +10,7 @@ scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
 scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
 scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
 scrills/scripts/_manifest.py    README metadata/source reading, shared by CLI and boot
-scrills/scripts/_history.py     direct response files, synchronous return, bounded history reads
+scrills/scripts/_history.py     direct output files, synchronous return, ID-based byte reads
 scrills/SKILL.md          the manual agents read; also where the version lives
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
@@ -68,19 +68,16 @@ finalization; do not turn this field into an import-time provenance claim.
 
 ## Response history
 
-Every admitted py/run saves stdout/stderr automatically under the user home's `.results/<id>/`.
-Keep capture simple: direct file redirection, then synchronous response delivery from the boot's
-existing finalization path, BEFORE the command exits. No live copier, helper process, owner-pipe
-protocol, supervisor or import-namespace API. Nested callers must never overtake an inner response.
-Preserve full trailing-value output before the display cap, native stdio flushes, binary writes,
-normal exit handlers and non-daemon threads. Responses are for batch work, not interactive prompts;
-post-finalization/background writers are outside the returned-snapshot guarantee.
+Save only ordinary stdout/stderr under `.results/<id>/` and return those bytes synchronously
+from the boot's finalization, before exit. No metadata, alternate echo, helper process or live
+copier. Preserve descriptors, native flushes, subprocess/fork behavior and nested return order.
+Preparation failure restores streams and warns, then execution continues without saving.
 
-The metadata-only `.runs` registry stays independent. History owns a retained metadata snapshot,
-so registry rotation/failure cannot lose a saved response. Incomplete output is never labelled
-complete; history reads cannot require the venv or import user code. Storage contains unredacted
-output and is private, with no automatic eviction: document privacy and disk growth honestly.
-The two-root-file scrill layout is authoring guidance, not a new resolver or validation rule.
+`history` lists recent IDs; `history <id>` reads raw bytes with only --offset/--limit and
+--stream stdout|stderr. No paths, line/combined modes, escaping or completion claims. Output may
+be partial; execution information belongs to the independent registry. Read without a venv or
+user imports. Keep private permissions and existing output; there is no automatic eviction.
+The two-root-file scrill layout remains authoring guidance, not enforcement.
 
 ## Tests
 

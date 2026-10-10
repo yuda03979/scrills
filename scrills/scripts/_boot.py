@@ -32,8 +32,9 @@ STARTED = CTX['started']
 KNOWN = CTX['known']
 VERB = CTX['verb']
 BOOT_PID = os.getpid()
-for destination in CTX['history']['destinations']:
-    os.set_inheritable(destination, False)
+if CTX['history'] is not None:
+    for destination in CTX['history']['destinations']:
+        os.set_inheritable(destination, False)
 OUTCOME = {}
 if VERB == 'run':
     main_module = sys.modules.get('__main__')
@@ -113,10 +114,10 @@ def _write_record():
     if os.getpid() != BOOT_PID:
         return
     try:
-        if 'exit' not in OUTCOME:
+        if CARD is None or 'exit' not in OUTCOME:
             return
         import fcntl
-        record = dict(CTX['info'])
+        record = dict(CARD)
         code = OUTCOME['exit']
         if code == 0:
             status = 'ok'
@@ -136,15 +137,6 @@ def _write_record():
                 record['imported'] = dict((name, manifest.version_of(sys.modules.get('scrills.' + name))) for name in names)
         except Exception:
             pass
-        try:
-            history.finish(CTX['history'], record)
-        except (OSError, ValueError):
-            try:
-                os.write(2, b'scrills: history could not save the execution outcome\n')
-            except OSError:
-                pass
-        if CARD is None:
-            return
         lock = None
         try:
             lock = os.open(LOG_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
@@ -175,7 +167,7 @@ def _write_record():
             except OSError:
                 pass
         try:
-            history.deliver(CTX['history'])
+            history.finish(CTX['history'])
         except Exception:
             pass
 def _finish(code):
@@ -209,13 +201,8 @@ if VERB == 'py':
     def _echo(value):
         text = repr(value)
         if ECHO_CAP > 0 and len(text) > ECHO_CAP:
-            shown = text[:ECHO_CAP] + '\n… (+{:,} chars — recover with scrills history)'.format(len(text) - ECHO_CAP)
-            if os.getpid() == BOOT_PID and sys.stdout is sys.__stdout__:
-                history.echo(CTX['history'], text, shown, sys.stdout)
-            else:
-                print(shown)
-        else:
-            print(text)
+            text = text[:ECHO_CAP] + '\n… (+{:,} chars — print it or write it to a file)'.format(len(text) - ECHO_CAP)
+        print(text)
     status = 0
     flag = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
     try:

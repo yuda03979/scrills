@@ -82,21 +82,21 @@ echo "unread from:support" | scrills run emails
 
 ## Recover a response
 
-Every `py`/`run` automatically saves stdout and stderr and returns the final response with a
-run ID on stderr first. The command returns its response before exiting; there is no live
-forwarding or helper process. If a harness truncates or loses it, retrieve instead of rerunning:
+`py`/`run` automatically saves ordinary stdout/stderr and returns it before exiting, with a
+run ID on stderr first. If the harness truncates it, retrieve by ID instead of rerunning:
 
 ```bash
-scrills history
-scrills history <id>
+scrills history                         # recent IDs
+scrills history <id>                    # stdout, first 8192 bytes
 scrills history <id> --offset 8192 --limit 8192
-scrills history <id> --stream stderr --line 1 --lines 20
+scrills history <id> --stream stderr
 ```
 
-Reads are bounded and provide continuation offsets. The default view is stdout then stderr,
-not temporal order. Results survive registry rotation and remain until explicitly removed;
-output may contain secrets and disk use can grow. Incomplete runs/captures are labelled honestly.
-History retrieves output, not unfinished computation; it does not keep jobs alive after a timeout.
+Reads return raw bytes, with a next-offset command on stderr when more remain. No storage paths,
+metadata or completion claims: interrupted runs may leave partial output; `ps` describes execution.
+If saving cannot be prepared, scrills warns and runs normally without it. Saved output remains
+until removed, may contain secrets, and can grow on disk. History does not undo scrills' own
+trailing-echo cap or keep a job alive.
 
 ## The format
 

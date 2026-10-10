@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.1"
+  version: "0.3.2"
 ---
 
 # scrills
@@ -53,7 +53,7 @@ PY
 
 `help(emails)` is useful for API lookup after review, but requires importing the module and does not load its README. Never use it as the initial reading step.
 
-`scrills py` is one-shot: the final response is returned after execution, the trailing expression echoes like a REPL, top level may `await`, and **Python variables do not persist between calls**. Responses are saved automatically. A huge trailing expression displays truncated (8,192 characters; `SCRILLS_ECHO_CAP` overrides, 0 = uncapped), but its full representation is retained for `scrills history`.
+`scrills py` is one-shot: the final response is returned after execution, the trailing expression echoes like a REPL, top level may `await`, and **Python variables do not persist between calls**. History saves that same output. A huge trailing expression is capped at 8,192 characters (`SCRILLS_ECHO_CAP` overrides, 0 = uncapped); history does not undo this cap — print or write the full value when needed.
 
 Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
@@ -63,21 +63,20 @@ Input reaches a scrill four ways: function arguments when imported — the main 
 
 ## Recovering a response
 
-Every admitted `py`/`run` writes stdout and stderr directly to private files. During normal finalization, the same process returns the saved response with `scrills: run <id>` once on stderr first — before it exits, so nested calls preserve their order. Stdout stays byte-clean for pipes. **If a response was truncated or lost, use history instead of repeating expensive work.** No flag to remember:
+`py`/`run` saves ordinary stdout/stderr automatically and returns it synchronously before exit, with `scrills: run <id>` once on stderr first. **If the harness truncates or loses output, retrieve by ID instead of rerunning.** No storage paths are needed:
 
 ```bash
-scrills history
-scrills history <id>
+scrills history                         # latest 20 IDs, newest directory first
+scrills history <id>                    # stdout, first 8192 bytes
 scrills history <id> --offset 8192 --limit 8192
 scrills history <id> --stream stderr
-scrills history <id> --stream stdout --line 20 --lines 10
 ```
 
-`history` lists the latest 20 saved invocations across projects. An ID retrieves a bounded page (8,192-byte default, `--limit` 1–65,536), with ranges and a next-byte-offset command. Offsets start at 0; lines start at 1. Line selection cannot combine with `--offset`, and the byte/display bound still applies to giant lines — use the printed byte cursor to continue without skipping a suffix. The default view is stdout followed by stderr, **not** a temporal merge; `--stream stdout|stderr|both` selects the view whose offsets/lines you are reading. Unsafe/non-text bytes are escaped for display; saved bytes are unchanged. History never reruns or imports a scrill, creates a runtime, or records its own reads. Its exit code describes retrieval (0 read, 1 unreadable/corrupt data, 2 usage/unknown ID), not the original program's outcome.
+Offsets are zero-based bytes within the chosen stream; `--limit` accepts 1–65,536. Raw bytes go to stdout, with a next-offset command on stderr when more remain. There is no line mode, combined stream, escaping, metadata or completion label. History never imports/reruns code, needs a venv, or records its reads; exit 0 means read/list succeeded, 1 unreadable output, 2 usage/unknown ID. Execution information belongs to `ps`; saved output may be partial after interruption.
 
-The private files live under `<user home>/.results/<id>/`, independently of registry rotation, and **remain until you remove them**. There is no automatic eviction or saved-output size cap: disk use can grow. Responses include printed secrets and exception messages; no redaction is attempted. Input/code/arguments are not separately recorded, but anything printed is output. History is recovery storage, not permanent application state or Python-object serialization; a library's already-abbreviated `repr()` stays abbreviated.
+If capture setup fails, scrills warns and runs normally without saving. If termination prevents an ID response, find it with `history`. Output files under the user library's `.results/` remain until removed, independently of registry rotation; disk use can grow and printed secrets are retained unredacted. No input/code/argv is separately saved. Existing output stays readable; old metadata is ignored.
 
-Capture preparation failure refuses before user code runs. A killed run or failed capture is labelled **incomplete**, never a completed result; available bytes can still be inspected. If termination prevented the ID from being returned, find it with `scrills history`. History cannot finish computation or guarantee survival after a caller timeout. There is no helper process or live forwarding: stdout/stderr are files, so use batch invocations, not interactive prompts or progress-dependent protocols. Normal Python exit handlers, joined threads and buffered native stdio are flushed before returning the response. Unjoined/background writers or interpreter cleanup after that finalization boundary are not promised in the returned snapshot; later writes may appear only in history. Losing delivery does not delete the saved files. Runtime setup/refusals, read verbs, `install`, and bare-python calls are not captured; old unsaved runs cannot be recovered retroactively.
+Capture is for batch work, not interactive prompts or live progress. Normal exit handlers, joined threads and native stdio flush before return; unjoined/background writers and later interpreter cleanup are outside the returned-snapshot guarantee. No helper process, detachment or session continuity is provided. Losing delivery does not delete saved bytes. Setup/refusals, read verbs, `install` and bare-python calls are not captured.
 
 ## Runs are recorded
 

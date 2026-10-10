@@ -83,8 +83,9 @@
 # Responses are separate: every admitted py/run automatically retains stdout and stderr under
 # <home>/.results/<id>. Output goes directly to files. The boot's finalizer returns the saved
 # response with an ID on stderr BEFORE exiting, so nested callers cannot overtake its output.
-# _history.py owns storage and bounded reads; no helper process, live copier or supervision.
-# No input/code/argv is stored. Output may contain secrets; it stays until explicitly removed.
+# _history.py saves that same output and retrieves bytes by ID; no metadata or live copier.
+# Setup failure warns and runs normally without saved output. No input/code/argv is stored.
+# Output may contain secrets; it stays until explicitly removed.
 #
 # When a run dies on a missing scrill or third-party package, the boot appends one stderr line
 # to the traceback - the names that exist, or `scrills install <pkg>`: raised louder, never
@@ -121,7 +122,7 @@ USAGE = """usage: scrills <verb>
   run <name> ...     run a scrill that defines main() as a program
   install <pkg> ...  install a package into the shared environment (pip)
   ps                 runs: what's running now, what died, the last 24h
-  history [id] ...   recover responses; --offset/--limit, --line/--lines, --stream
+  history [id] ...   read saved output; --offset/--limit in bytes, --stream stdout|stderr
   where              paths: layers, python, how to install a package
   --version          the scrills version"""
 
@@ -882,12 +883,13 @@ def execute(home, found, verb, name, layer, argv, boot):
     trace, parent, flags = lineage()
     info = make_card(verb, name, layer, os.getpid(), run_id, trace, parent)
     try:
-        response = history_module().start(home, info)
+        response = history_module().start(home, run_id)
     except (OSError, ValueError) as error:
-        fail(f"scrills: cannot prepare response history: {error}\nFix {os.path.join(home, '.results')} before retrying; no user code ran")
+        response = None
+        history_module().notice(2, f"scrills: cannot prepare response history: {error}; running without saved output")
     card, lock_fd = register(home, info)
     context = boot_ctx(home, verb, card, lock_fd, time.time(), run_id, trace, flags, known_names(found))
-    context.update(info=info, history=response)
+    context.update(history=response)
     os.environ["SCRILLS_BOOT_CTX"] = json.dumps(context)
     os.execv(python, [python, *child_flags(home), boot, *argv])
 
