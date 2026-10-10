@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.2.21"
+  version: "0.2.22"
 ---
 
 # scrills

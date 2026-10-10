@@ -2379,7 +2379,6 @@ def test_docs_include_offsets():
     expected = {
         "docs/manual.md": ("scrills/SKILL.md", closing + 1),
         "docs/index.md": ("README.md", 2),
-        "docs/examples.md": ("examples/README.md", 2),
     }
     for doc, (target, skipped) in expected.items():
         text = (repo / doc).read_text()
@@ -2390,4 +2389,3 @@ def test_docs_include_offsets():
             f"ends at line {skipped} - fix the offset so it skips exactly that block"
         )
     assert (repo / "README.md").read_text().splitlines()[0].startswith("# ")
-    assert (repo / "examples" / "README.md").read_text().splitlines()[0].startswith("# ")

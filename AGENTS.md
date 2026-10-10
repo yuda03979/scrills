@@ -10,7 +10,6 @@ scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
 scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
 scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
 scrills/SKILL.md          the manual agents read; also where the version lives
-examples/.scrills/        the examples project layer (harness wiring today)
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
 install.sh                command symlink plus detected harness skill links, nothing else
@@ -33,16 +32,16 @@ carries no code.
 - **Docstrings are the product.** A scrill's module and function docstrings are its manual —
   `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` is the
   manual when present — the docstring then explains its own file, and a frontmattered one is
-  ignored as a manifest, aloud). Never strip a docstring anywhere under
-  `examples/.scrills/` or in a scrill you write. Elsewhere, prefer clear names over comments;
-  the CLI keeps its explanation in one block at the top of the file and none below it.
+  ignored as a manifest, aloud). Never strip a docstring in a scrill you write. Elsewhere,
+  prefer clear names over comments; the CLI keeps its explanation in one block at the top of
+  the file and none below it.
 - **The version lives once**, in `scrills/SKILL.md` frontmatter under `metadata.version`. The CLI
   reads it there; nothing else states a version number. Bump it for anything worth shipping.
 - **The frontmatter follows the Agent Skills spec**: only `name`, `description`, `license`,
   `compatibility`, `metadata` and `allowed-tools`, with `name` matching the directory. A test
   enforces it. Scrill *docstrings* deliberately differ — see below.
-- **`.scrills/` folders are live code**, not fixtures. `examples/.scrills/` is a real project
-  layer; `tests/fixtures/ide/` exists to prove editors and linters stay out of it.
+- **`.scrills/` folders are live code**, not fixtures. `tests/fixtures/ide/` exists only to
+  prove editors and linters stay out of them.
 
 ## Scrills are not skills, in one deliberate way
 
@@ -62,10 +61,9 @@ because only that file is claimed as a skill.
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **147 passed** on Python 3.13; Python 3.9 reports **145 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **129 passed** on Python 3.13; Python 3.9 reports **127 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
-environment can't steer it. Example tests run offline against a scratch HOME — **never let a test
-spend money or make noise.**
+environment can't steer it. **Never let a test spend money or make noise.**
 
 New behaviour gets a test that was seen failing first.
 
@@ -82,7 +80,7 @@ uvx --with-requirements docs/requirements.txt mkdocs serve
 uvx --with-requirements docs/requirements.txt mkdocs build --strict
 ```
 
-`docs/manual.md` and `docs/examples.md` include `scrills/SKILL.md` and `examples/README.md` by
-snippet — one source per file. Don't paste their content into the docs tree. The includes skip
-each file's head block by line offset; `test_docs_include_offsets` pins the offsets to the real
-blocks — if it fails, fix the offset, never the assertion.
+`docs/manual.md` includes `scrills/SKILL.md` by snippet — one source for the manual. Don't
+paste its content into the docs tree. The include skips the file's frontmatter by line offset;
+`test_docs_include_offsets` pins the offset to the real block — if it fails, fix the offset,
+never the assertion.

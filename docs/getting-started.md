@@ -44,14 +44,11 @@ That's the whole install. The first `py` or `run` creates a shared environment a
 
 ## Kick the tires
 
-The repo ships a live example layer:
-
 ```bash
-cd examples
 scrills list
 ```
 
-`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. What ships today is `harness_config`, harness wiring for Claude Code and Pi (see "Teach your agent" below); the library becomes interesting as you fill it, and the next section writes your first scrill.
+`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. A fresh installation reports that there are no scrills yet; the next section adds the first one.
 
 `scrills py` behaves like a disposable REPL: stdout passes through, the trailing expression echoes (truncated past 8,192 characters — print to a file for the full thing), top level may `await`, and nothing persists between calls — anything worth keeping goes in a file. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
@@ -168,15 +165,7 @@ pip behind it — arguments pass through (`-U`, `==` pins, `-r`), and `scrills w
 
 Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise the skill-link lines are in the by-hand Install block above, and for any other harness, paste `scrills/SKILL.md` into the session or reference its path.
 
-The `harness_config` example automates the wiring from inside scrills itself:
-
-```bash
-cd examples
-scrills run harness_config apply       # Claude Code (the default)
-scrills run harness_config apply pi    # Pi
-```
-
-For Claude Code, apply links the skill and adds the Bash permission rule that lets sessions run `scrills` unprompted. Add `--hook` to the Claude Code command and it also injects the library listing into every session's start (opt-in — a SessionStart hook running `scrills list`), so the agent knows what exists before any task arrives. For Pi, apply only links the skill under `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`): Pi already provides bash, and no settings or extension are needed. Run Pi's `/reload` after changing resources in an existing session. The example lives in the project layer, so copy it into `~/.scrills` to have it anywhere; `status` shows what's wired, and `undo` removes exactly what apply added.
+Scrills does not modify harness settings, permissions, hooks, models, or extensions. Those remain under the control of the user and harness. Run Pi's `/reload` after changing skill resources in an existing session.
 
 A taught agent checks `scrills list` before writing logic, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
 

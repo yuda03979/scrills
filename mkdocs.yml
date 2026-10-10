@@ -32,7 +32,6 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - The manual: manual.md
-  - Examples: examples.md
 
 markdown_extensions:
   - admonition
