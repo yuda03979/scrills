@@ -349,23 +349,86 @@ def manifest(entry):
     return [problem or "(no module docstring, so it announces nothing)"], None, False, []
 
 
+def unquote(value):
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def unsupported_shape(value):
+    if re.match(r"^[|>][+-]?\d*$", value):
+        return "uses a YAML block scalar"
+    if value[:1] in ("[", "{"):
+        return "is a structured value"
+    return None
+
+
+FIELD_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
+
+
 def frontmatter_fields(lines):
     if len(lines) < 2 or lines[0].strip() != "---" or lines[-1].strip() != "---":
-        return None
+        return {}, []
+    consumed = ("name", "description", "version", "compatibility")
     fields = {}
-    for line in lines[1:-1]:
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line.strip())
-        if match:
-            value = match.group(2).strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                value = value[1:-1]
-            fields[match.group(1)] = value
-    return fields
+    problems = []
+    metadata_version = None
+    version_declared = False
+    in_metadata = False
+    metadata_indent = None
+    current = None
+    for raw in lines[1:-1]:
+        if not raw.strip():
+            current = None
+            continue
+        if raw[:1] not in (" ", "\t"):
+            in_metadata = False
+            current = None
+            match = FIELD_KEY.match(raw.strip())
+            if match is None:
+                continue
+            key, value = match.group(1), match.group(2).strip()
+            if key == "metadata":
+                in_metadata = True
+                continue
+            if key == "version":
+                version_declared = True
+            if key not in consumed:
+                continue
+            shape = unsupported_shape(value)
+            if shape is not None:
+                problems.append(f"({key} {shape} - scrills frontmatter takes one-line values)")
+                continue
+            fields[key] = unquote(value)
+            current = key
+            continue
+        depth = len(raw) - len(raw.lstrip())
+        if in_metadata:
+            if metadata_indent is None:
+                metadata_indent = depth
+            if depth != metadata_indent:
+                continue
+            match = FIELD_KEY.match(raw.strip())
+            if match is not None and match.group(1) == "version" and metadata_version is None:
+                value = match.group(2).strip()
+                if value and unsupported_shape(value) is None:
+                    metadata_version = unquote(value)
+            continue
+        if current is not None:
+            problems.append(f"({current} continues on the next line - scrills frontmatter takes one-line values)")
+            fields.pop(current, None)
+            current = None
+    if version_declared and metadata_version is not None:
+        problems.append("(version declared in both places - keep one; the top-level value wins)")
+    if not fields.get("version") and metadata_version is not None:
+        fields["version"] = metadata_version
+    return fields, problems
 
 
 def entry_description(lines, kind):
     if kind == "frontmatter":
-        return (frontmatter_fields(lines) or {}).get("description", "")
+        fields, _ = frontmatter_fields(lines)
+        return fields.get("description", "")
     if kind == "unclosed":
         return ""
     return lines[0]
@@ -382,7 +445,8 @@ def notices(name, lines, kind, filed=False):
         return found + [f"(no frontmatter - open {where} with ---, name/description/version, ---)"]
     if kind != "frontmatter":
         return found
-    fields = frontmatter_fields(lines) or {}
+    fields, problems = frontmatter_fields(lines)
+    found.extend(problems)
     stated = fields.get("name", "")
     if stated and stated != name:
         found.append(f"(frontmatter name '{stated}' differs from folder '{name}' - the folder name is the import name)")
@@ -640,12 +704,66 @@ def writable_library_error(home, path, error):
     )
 
 
+def venv_ready_path(home):
+    return os.path.join(home, ".venv", ".scrills-ready")
+
+
+def venv_ready(home):
+    return read_text(venv_ready_path(home)) == "1\n" and os.path.exists(venv_python(home))
+
+
+def mark_venv_ready(home):
+    path = venv_ready_path(home)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("1\n")
+        os.replace(tmp, path)
+    except OSError as error:
+        fail(
+            f"scrills: cannot mark the environment ready at {path}: {error.strerror or error}\n"
+            f"Fix the permissions, or delete {os.path.join(home, '.venv')} and rerun"
+        )
+
+
+def validate_venv(home):
+    target = os.path.join(home, ".venv")
+    python = venv_python(home)
+
+    def refuse(reason):
+        fail(
+            f"scrills: {target} is not a complete environment ({reason}).\n"
+            f"Rebuild it: rm -rf {target}  - then rerun, and reinstall any packages (scrills install ...)"
+        )
+
+    if not os.path.isdir(target):
+        refuse("not a directory")
+    if not os.path.isfile(os.path.join(target, "pyvenv.cfg")):
+        refuse("no pyvenv.cfg")
+    if not os.path.exists(python):
+        refuse("bin/python is missing or dangling")
+    if site_packages(home) is None:
+        refuse("no site-packages")
+    prefix_check = "import sys, os; sys.exit(0 if os.path.realpath(sys.prefix) == os.path.realpath(sys.argv[1]) and sys.prefix != sys.base_prefix else 3)"
+    for command, reason in (
+        ([python, "-I", "-c", prefix_check, target], "its python does not identify it as its own environment"),
+        ([python, "-I", "-m", "pip", "--isolated", "install", "--help"], "its pip cannot run - likely an interrupted first build"),
+    ):
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            refuse(reason)
+            return
+        if result.returncode != 0:
+            refuse(reason)
+
+
 def ensure_venv(home):
     python = venv_python(home)
-    if os.path.exists(python):
+    if venv_ready(home):
         return python
     target = os.path.join(home, ".venv")
-    if os.path.lexists(python):
+    if os.path.lexists(python) and not os.path.exists(python):
         fail(
             f"scrills: {python} points at a python that no longer exists (removed or upgraded).\n"
             f"Rebuild the environment: rm -rf {target}  - then rerun, and reinstall any packages (scrills install ...)"
@@ -665,19 +783,22 @@ def ensure_venv(home):
             lock.close()
         writable_library_error(home, lock_path, error)
     with lock:
-        if os.path.exists(python):
+        if venv_ready(home):
             return python
-        print(f"creating the scrills environment at {target} (first run, a few seconds)", file=sys.stderr)
-        result = subprocess.run(
-            [sys.executable, "-m", "venv", target],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        if result.returncode != 0 or not os.path.exists(python):
-            detail = result.stdout.strip() or f"exit {result.returncode}"
-            fail(f"scrills: creating the environment at {target} failed: {detail}\nCreate it by hand: {sys.executable} -m venv {target}")
-        write_ignore(target)
+        if not os.path.exists(target):
+            print(f"creating the scrills environment at {target} (first run, a few seconds)", file=sys.stderr)
+            result = subprocess.run(
+                [sys.executable, "-m", "venv", target],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if result.returncode != 0 or not os.path.exists(python):
+                detail = result.stdout.strip() or f"exit {result.returncode}"
+                fail(f"scrills: creating the environment at {target} failed: {detail}\nCreate it by hand: {sys.executable} -m venv {target}")
+            write_ignore(target)
+        validate_venv(home)
+        mark_venv_ready(home)
     return python
 
 
@@ -962,7 +1083,8 @@ def within_day(record):
         begin = datetime.datetime.fromisoformat(record.get("started", ""))
     except (TypeError, ValueError):
         return False
-    return (datetime.datetime.now(begin.tzinfo) - begin).total_seconds() <= 86400
+    seconds = (datetime.datetime.now(begin.tzinfo) - begin).total_seconds()
+    return 0 <= seconds <= 86400
 
 
 def cmd_ps(argv):
@@ -1059,7 +1181,11 @@ def cmd_where(argv):
 def relaunch():
     python = venv_python(user_home())
     try:
-        if not os.path.exists(python) or os.path.realpath(python) == os.path.realpath(sys.executable):
+        if not os.path.exists(python):
+            if os.path.lexists(python):
+                print(f"scrills: {python} is dangling - staying on {sys.executable}; py or run prints the remedy", file=sys.stderr)
+            return
+        if os.path.realpath(python) == os.path.realpath(sys.executable):
             return
         os.execv(python, [python, "-I", SCRIPT, *sys.argv[1:]])
     except OSError:

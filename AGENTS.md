@@ -48,7 +48,10 @@ carries no code.
 A scrill's manual — a `SKILL.md` beside `__init__.py`, or the docstring in the one-file shape — looks like a
 SKILL.md and differs on purpose: the name is a **Python identifier**, so `_` where a skill name
 would have `-` (the folder name is the import name, and an identifier can't hold a hyphen).
-`version` may sit top-level or under `metadata:` as the spec nests it — both are read.
+The consumed fields (`name`, `description`, `version`, `compatibility`) are parsed as one-line
+values — a restricted subset of YAML, never a full parser; nested, block or structured values
+are raised by `list`, not guessed at. `version` alone may also sit under `metadata:` as the
+spec nests it — declared in both places, the top-level one wins, aloud.
 
 A scrill's manual is never validated as a skill — a skill folder becomes a scrill by adding
 `__init__.py`, and anything that exports a scrill as a skill maps `_` → `-` at that boundary.
@@ -61,7 +64,7 @@ because only that file is claimed as a skill.
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **129 passed** on Python 3.13; Python 3.9 reports **127 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **143 passed** on Python 3.13; Python 3.9 reports **141 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 

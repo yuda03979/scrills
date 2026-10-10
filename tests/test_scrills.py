@@ -2,6 +2,7 @@
 # project directory per test. Run: uv run --with pytest==8.4.2 python -m pytest tests/ -q
 import ast
 import datetime
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
@@ -832,6 +833,92 @@ def test_site_packages_picked_by_pyvenv_cfg(tmp_path):
     assert f"resolver: {venv / 'lib' / 'python3.13' / 'site-packages'}" in result.stdout
 
 
+def test_markerless_venv_reads_dont_adopt_then_execution_does(tmp_path):
+    fresh = tmp_path / "adopthome"
+    fresh.mkdir()
+    venv_dir = fresh / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True, capture_output=True)
+    marker = venv_dir / ".scrills-ready"
+    assert not marker.exists()
+    for verb in (["list"], ["where"], ["--version"]):
+        result = scrills(verb, fresh, tmp_path)
+        assert result.returncode == 0, result.stderr
+    assert not marker.exists(), "read verbs must not adopt or mark the environment"
+    result = scrills(["py"], fresh, tmp_path, stdin="print('adopted')")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "adopted\n"
+    assert marker.read_text() == "1\n"
+
+
+def test_incomplete_markerless_venv_is_refused(tmp_path):
+    fresh = tmp_path / "nopiphome"
+    fresh.mkdir()
+    venv_dir = fresh / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv_dir)], check=True, capture_output=True)
+    result = scrills(["py"], fresh, tmp_path, stdin="1")
+    assert result.returncode == 1
+    assert f"rm -rf {venv_dir}" in result.stderr
+    assert not (venv_dir / ".scrills-ready").exists()
+    bare = tmp_path / "barehome"
+    bin_dir = bare / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(sys.executable)
+    result = scrills(["py"], bare, tmp_path, stdin="1")
+    assert result.returncode == 1
+    assert f"rm -rf {bare / '.venv'}" in result.stderr
+    assert not (bare / ".venv" / ".scrills-ready").exists()
+
+
+def test_markerless_venv_waits_for_the_lock(tmp_path):
+    fresh = tmp_path / "waithome"
+    fresh.mkdir()
+    venv_dir = fresh / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True, capture_output=True)
+    runs = fresh / ".runs"
+    runs.mkdir()
+    lock = open(runs / "venv.lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        child = subprocess.Popen(
+            [sys.executable, CLI, "py"],
+            env={**base_env(), "SCRILLS_HOME": str(fresh)},
+            cwd=str(tmp_path),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        child.stdin.write("print('unblocked')")
+        child.stdin.close()
+        time.sleep(2.0)
+        assert child.poll() is None, "ensure_venv must wait on venv.lock instead of trusting bin/python"
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    assert child.wait(timeout=120) == 0, child.stderr.read()
+    assert child.stdout.read() == "unblocked\n"
+    assert (venv_dir / ".scrills-ready").read_text() == "1\n"
+
+
+def test_documented_rebuild_path(tmp_path):
+    fresh = tmp_path / "rebuildhome"
+    result = scrills(["py"], fresh, tmp_path, stdin="print('built')")
+    assert result.returncode == 0, result.stderr
+    venv_dir = fresh / ".venv"
+    marker = venv_dir / ".scrills-ready"
+    assert marker.read_text() == "1\n"
+    assert (fresh / ".runs" / "venv.lock").exists()
+    shutil.rmtree(venv_dir)
+    for verb in (["--version"], ["list"], ["where"]):
+        result = scrills(verb, fresh, tmp_path)
+        assert result.returncode == 0, result.stderr
+    assert not venv_dir.exists(), "read verbs must not rebuild the environment"
+    result = scrills(["py"], fresh, tmp_path, stdin="print('rebuilt')")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "rebuilt\n"
+    assert marker.read_text() == "1\n"
+
+
 def test_resolver_ships_start_file(home, project):
     assert scrills(["py"], home, project, stdin="1").returncode == 0
     result = scrills(["where"], home, project)
@@ -1196,6 +1283,101 @@ def test_ps_keeps_the_card_when_the_append_fails(home, project):
     assert result.returncode == 0
     assert not card_path.exists()
     assert [record["status"] for record in log_records(home, "unrecordable")] == ["died"]
+
+
+def test_finished_run_drops_card_when_its_log_append_fails(home, project):
+    runs = Path(home) / ".runs"
+    runs.mkdir(exist_ok=True)
+    log = runs / "log.jsonl"
+    aside = runs / "log.jsonl.aside"
+    if log.exists():
+        os.rename(log, aside)
+    log.mkdir()
+    try:
+        child = subprocess.Popen(
+            [sys.executable, CLI, "py"],
+            env={**base_env(), "SCRILLS_HOME": str(home)},
+            cwd=str(project),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        out, err = child.communicate("print('finished-fine')")
+        card = runs / f"{child.pid}.json"
+        assert child.returncode == 0, err
+        assert out == "finished-fine\n"
+        assert not card.exists(), "a completed run must drop its card even when the append fails"
+    finally:
+        log.rmdir()
+        if aside.exists():
+            os.rename(aside, log)
+    result = scrills(["ps"], home, project)
+    assert result.returncode == 0
+    false_deaths = [
+        record
+        for record in log_records(home, "py")
+        if record.get("pid") == child.pid and record.get("status") == "died"
+    ]
+    assert false_deaths == []
+
+
+def test_interrupted_finalization_keeps_the_card(home, project):
+    snippet = textwrap.dedent(
+        """
+        import sys
+        class Boom(Exception):
+            def __str__(self):
+                sys.stderr.close()
+                return "x"
+        raise Boom()
+        """
+    )
+    child = subprocess.Popen(
+        [sys.executable, CLI, "py"],
+        env={**base_env(), "SCRILLS_HOME": str(home)},
+        cwd=str(project),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child.communicate(snippet)
+    card = Path(home) / ".runs" / f"{child.pid}.json"
+    assert child.returncode == 1
+    assert card.exists(), "a partial outcome (no exit) must keep the card for the died sweep"
+    result = scrills(["ps"], home, project)
+    assert result.returncode == 0
+    assert not card.exists()
+    deaths = [
+        record
+        for record in log_records(home, "py")
+        if record.get("pid") == child.pid and record.get("status") == "died"
+    ]
+    assert len(deaths) == 1
+
+
+def test_last_day_excludes_future_records(tmp_path):
+    fresh = tmp_path / "futurehome"
+    runs = fresh / ".runs"
+    runs.mkdir(parents=True)
+    now = datetime.datetime.now().astimezone()
+    records = [
+        {
+            "verb": "py", "name": "recent", "id": "a" * 16, "pid": 1, "cwd": str(tmp_path),
+            "who": "test", "started": now.isoformat(timespec="seconds"), "exit": 0, "status": "ok", "ms": 5,
+        },
+        {
+            "verb": "py", "name": "tomorrowland", "id": "b" * 16, "pid": 2, "cwd": str(tmp_path),
+            "who": "test", "started": (now + datetime.timedelta(days=2)).isoformat(timespec="seconds"),
+            "exit": 1, "status": "error", "error_type": "ValueError", "ms": 5,
+        },
+    ]
+    (runs / "log.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    result = scrills(["ps"], fresh, tmp_path)
+    assert result.returncode == 0
+    assert "last 24h: 1 runs" in result.stdout
+    assert "tomorrowland" not in result.stdout
 
 
 def test_ps_keeps_and_names_an_unreadable_card(home, project):
@@ -1821,6 +2003,7 @@ def test_parallel_first_contact(tmp_path):
     assert codes == [0, 0, 0, 0], outcomes
     assert all(out == "1\n" for out, _ in outcomes)
     assert (fresh / ".venv" / "bin" / "python").exists()
+    assert (fresh / ".venv" / ".scrills-ready").read_text() == "1\n"
 
 
 def test_cli_under_venv_python_returns(home, project):
@@ -2110,6 +2293,126 @@ def test_nested_metadata_version_is_accepted_in_both_homes(home, project):
     assert used.returncode == 0
     assert used.stdout == "3\n"
     assert log_records(home, "py")[-1]["imported"] == {"nested": "3.1.4", "nestedfile": "2.7.1"}
+
+
+def test_nested_metadata_fields_never_become_top_level(home, project):
+    write_scrill(
+        project / ".scrills",
+        "shaded",
+        "---\nname: shaded\ndescription: top level d\nversion: 0.1.0\nmetadata:\n  name: other\n  description: nested d\n---",
+        "VALUE = 1",
+    )
+    filed = write_skill_md(
+        project / ".scrills",
+        "shadedfile",
+        "---\nname: shadedfile\ndescription: top level file d\nversion: 0.1.0\nmetadata:\n  name: otherfile\n  description: nested file d\n---\n",
+    )
+    (filed / "__init__.py").write_text("VALUE = 2\n")
+    listing = scrills(["list"], home, project)
+    assert "- shaded: top level d" in listing.stdout
+    assert "- shadedfile: top level file d" in listing.stdout
+    assert "nested d" not in listing.stdout
+    assert "nested file d" not in listing.stdout
+    for entry in ("- shaded: top level d", "- shadedfile: top level file d"):
+        chunk = entry_chunk(listing.stdout, entry)
+        assert "differs from folder" not in chunk
+        assert "(no " not in chunk
+
+
+def test_unrelated_nested_version_is_not_the_version(home, project):
+    write_scrill(
+        project / ".scrills",
+        "deepver",
+        "---\nname: deepver\ndescription: d\nupstream:\n  version: 9.9.9\n---",
+        "VALUE = 1",
+    )
+    listing = scrills(["list"], home, project)
+    chunk = entry_chunk(listing.stdout, "- deepver: d")
+    assert "(no version in frontmatter)" in chunk
+    used = scrills(["py"], home, project, stdin="from scrills import deepver\ndeepver.VALUE")
+    assert used.returncode == 0
+    assert log_records(home, "py")[-1]["imported"] == {"deepver": None}
+
+
+def test_version_declared_in_both_places_raises_and_top_level_wins(home, project):
+    write_scrill(
+        project / ".scrills",
+        "twover",
+        '---\nname: twover\ndescription: d\nmetadata:\n  version: "2.0.0"\nversion: 1.0.0\n---',
+        "VALUE = 1",
+    )
+    listing = scrills(["list"], home, project)
+    chunk = entry_chunk(listing.stdout, "- twover: d")
+    assert "declared in both places" in chunk
+    used = scrills(["py"], home, project, stdin="from scrills import twover\ntwover.VALUE")
+    assert used.returncode == 0
+    assert log_records(home, "py")[-1]["imported"] == {"twover": "1.0.0"}
+
+
+def test_block_scalar_descriptions_are_raised_not_rendered(home, project):
+    for name, token in (("foldy", ">"), ("blocky", "|"), ("chompy", ">-")):
+        write_scrill(
+            project / ".scrills",
+            name,
+            f"---\nname: {name}\ndescription: {token}\n  folded text line\nversion: 0.1.0\n---",
+            "VALUE = 1",
+        )
+    listing = scrills(["list"], home, project)
+    for name, token in (("foldy", ">"), ("blocky", "|"), ("chompy", ">-")):
+        assert f"- {name}: {token}" not in listing.stdout
+        chunk = entry_chunk(listing.stdout, f"- {name}:")
+        assert "block scalar" in chunk
+        assert "(no description in frontmatter)" in chunk
+
+
+def test_structured_and_continued_values_are_raised_not_rendered(home, project):
+    write_scrill(
+        project / ".scrills",
+        "listy",
+        "---\nname: listy\ndescription: [a, b]\nversion: 0.1.0\n---",
+        "VALUE = 1",
+    )
+    write_scrill(
+        project / ".scrills",
+        "conty",
+        "---\nname: conty\ndescription: starts fine\n  then continues\nversion: 0.1.0\n---",
+        "VALUE = 2",
+    )
+    listing = scrills(["list"], home, project)
+    assert "- listy: [a, b]" not in listing.stdout
+    chunk = entry_chunk(listing.stdout, "- listy:")
+    assert "structured value" in chunk
+    assert "- conty: starts fine" not in listing.stdout
+    chunk = entry_chunk(listing.stdout, "- conty:")
+    assert "continues on the next line" in chunk
+    assert "(no description in frontmatter)" in chunk
+
+
+def test_unclosed_frontmatter_version_is_null_in_the_registry(home, project):
+    write_scrill(
+        project / ".scrills",
+        "openend",
+        "---\nname: openend\ndescription: d\nversion: 5.5.5",
+        "VALUE = 1",
+    )
+    listing = scrills(["list"], home, project)
+    assert "never closes" in listing.stdout
+    used = scrills(["py"], home, project, stdin="from scrills import openend\nopenend.VALUE")
+    assert used.returncode == 0
+    assert log_records(home, "py")[-1]["imported"] == {"openend": None}
+
+
+def test_indented_docstring_nested_version_agrees_everywhere(home, project):
+    folder = Path(project) / ".scrills" / "innerdoc"
+    folder.mkdir(parents=True)
+    doc = textwrap.indent('---\nname: innerdoc\ndescription: d\nmetadata:\n  version: "4.4.4"\n---', "    ")
+    (folder / "__init__.py").write_text(f'"""\n{doc}\n"""\nVALUE = 1\n')
+    listing = scrills(["list"], home, project)
+    chunk = entry_chunk(listing.stdout, "- innerdoc: d")
+    assert "(no version" not in chunk
+    used = scrills(["py"], home, project, stdin="from scrills import innerdoc\ninnerdoc.VALUE")
+    assert used.returncode == 0
+    assert log_records(home, "py")[-1]["imported"] == {"innerdoc": "4.4.4"}
 
 
 def test_install_sh_installs_the_clone_it_sits_in(tmp_path):

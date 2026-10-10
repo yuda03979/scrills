@@ -97,19 +97,47 @@ def _note_error(error):
             OUTCOME['error_at'] = spot[0] + ':' + str(spot[1])
     except Exception:
         pass
-def _fm_version(text):
-    lines = [line.strip() for line in text.strip().splitlines()]
-    if not lines or lines[0] != '---':
+def _fm_value(value):
+    if not value or value[0] in ('[', '{'):
         return None
-    for line in lines[1:]:
-        if line == '---':
+    if value[0] in ('|', '>'):
+        rest = value[1:]
+        if rest[:1] in ('+', '-'):
+            rest = rest[1:]
+        if rest == '' or rest.isdigit():
             return None
-        if line.startswith('version:'):
-            value = line[len('version:'):].strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
-                value = value[1:-1]
-            return value or None
-    return None
+    if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
+        value = value[1:-1]
+    return value or None
+def _fm_version(text):
+    lines = text.strip().splitlines()
+    if not lines or lines[0].strip() != '---':
+        return None
+    closed = False
+    top = nested = None
+    in_metadata = False
+    metadata_indent = None
+    for raw in lines[1:]:
+        line = raw.strip()
+        if line == '---':
+            closed = True
+            break
+        if not line:
+            continue
+        if raw[:1] not in (' ', '\t'):
+            in_metadata = line == 'metadata:'
+            if line.startswith('version:') and top is None:
+                top = _fm_value(line[len('version:'):].strip())
+            continue
+        if in_metadata:
+            depth = len(raw) - len(raw.lstrip())
+            if metadata_indent is None:
+                metadata_indent = depth
+            if depth == metadata_indent and line.startswith('version:') and nested is None:
+                nested = _fm_value(line[len('version:'):].strip())
+    if not closed:
+        return None
+    return top if top is not None else nested
 def _version_of(module):
     entry = getattr(module, '__file__', None)
     if entry:
@@ -118,9 +146,9 @@ def _version_of(module):
                 return _fm_version(handle.read())
         except OSError:
             pass
-    return _fm_version(getattr(module, '__doc__', None) or '')
+    return _fm_version(inspect.cleandoc(getattr(module, '__doc__', None) or ''))
 def _write_record():
-    if CARD is None or not OUTCOME or os.getpid() != BOOT_PID:
+    if CARD is None or 'exit' not in OUTCOME or os.getpid() != BOOT_PID:
         return
     try:
         import fcntl
@@ -162,9 +190,13 @@ def _write_record():
         finally:
             if lock is not None:
                 os.close(lock)
-        os.remove(CARD_PATH)
     except Exception:
         pass
+    finally:
+        try:
+            os.remove(CARD_PATH)
+        except OSError:
+            pass
 def _finish(code):
     OUTCOME['exit'] = code
     sys.exit(code)
