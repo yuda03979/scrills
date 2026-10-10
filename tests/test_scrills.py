@@ -75,14 +75,8 @@ def build_wheel(directory):
 def write_scrill(root, name, doc, body=""):
     folder = Path(root) / name
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "__init__.py").write_text(f'"""\n{doc}\n"""\n{textwrap.dedent(body)}')
-    return folder
-
-
-def write_skill_md(root, name, text):
-    folder = Path(root) / name
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "SKILL.md").write_text(text)
+    (folder / "README.md").write_text(doc, encoding="utf-8")
+    (folder / "__init__.py").write_text(f'"""Entry source for {name}."""\n{textwrap.dedent(body)}')
     return folder
 
 
@@ -347,10 +341,12 @@ def test_source_decoding_matches_python(home, project):
     bom.mkdir(parents=True)
     text = '"""\n---\nname: bom\ndescription: opens with a byte order mark\nversion: 0.1.0\n---\n"""\ndef main():\n    print("bom ran")\n    return 0\n'
     (bom / "__init__.py").write_bytes(text.encode("utf-8-sig"))
+    (bom / "README.md").write_text("---\nname: bom\ndescription: opens with a byte order mark\nversion: 0.1.0\n---\n")
     legacy = project / ".scrills" / "legacy"
     legacy.mkdir(parents=True)
     declared = '# -*- coding: latin-1 -*-\n"""\n---\nname: legacy\ndescription: café special\nversion: 0.1.0\n---\n"""\n'
     (legacy / "__init__.py").write_bytes(declared.encode("latin-1"))
+    (legacy / "README.md").write_text("---\nname: legacy\ndescription: café special\nversion: 0.1.0\n---\n", encoding="utf-8")
     listing = scrills(["list"], home, project)
     assert "doesn't parse" not in listing.stdout
     assert "- bom: opens with a byte order mark" in listing.stdout
@@ -446,7 +442,7 @@ def test_run_accepts_dynamic_main(home, project):
         assert f"{name} ran" in result.stdout
 
 
-def test_list_entry_fallbacks_without_frontmatter(home, project):
+def test_list_prose_readme_and_missing_manual(home, project):
     write_scrill(project / ".scrills", "prosey", "first line of prose\nsecond line")
     silent = project / ".scrills" / "silent"
     silent.mkdir(parents=True)
@@ -454,7 +450,7 @@ def test_list_entry_fallbacks_without_frontmatter(home, project):
     listing = scrills(["list"], home, project)
     assert "- prosey: first line of prose" in listing.stdout
     assert "second line" not in listing.stdout
-    assert "- silent: (no module docstring, so it announces nothing)" in listing.stdout
+    assert "- silent: (README.md is required or unreadable)" in listing.stdout
 
 
 def test_other_uid_project_layer_is_ignored(home, tmp_path):
@@ -478,6 +474,7 @@ def test_shadow_notice_on_py_and_run(home, project):
     assert ran.returncode == 0
     assert "clash" in ran.stderr
     (project / ".scrills" / "clash" / "__init__.py").unlink()
+    (project / ".scrills" / "clash" / "README.md").unlink()
     (project / ".scrills" / "clash").rmdir()
     (project / ".scrills" / "clash").symlink_to(Path(home) / "clash")
     linked = scrills(["py"], home, project, stdin="1")
@@ -964,9 +961,10 @@ def test_install_offline_wheel(home, project):
     assert check.stdout == "42\n"
 
 
-def test_pep723_block_keeps_docstring(home, project):
+def test_pep723_block_keeps_source_importable(home, project):
     folder = project / ".scrills" / "blocky"
     folder.mkdir(parents=True)
+    (folder / "README.md").write_text("---\nname: blocky\ndescription: declares deps\nversion: 0.1.0\n---\n")
     (folder / "__init__.py").write_text(
         "# /// script\n"
         '# dependencies = ["httpx"]\n'
@@ -1623,6 +1621,7 @@ def test_error_type_and_location(home, project):
 def test_syntax_error_locations(home, project):
     folder = project / ".scrills" / "badsyntax"
     folder.mkdir(parents=True)
+    (folder / "README.md").write_text("---\nname: badsyntax\ndescription: syntax fixture\nversion: 0.1.0\n---\n")
     (folder / "__init__.py").write_text("VALUE = 1\ndef main(:\n    pass\n")
     (folder / "helper.py").write_text("OK = 1\nOK = = 2\n")
     snippet = scrills(["py"], home, project, stdin="x = (\n")
@@ -2178,18 +2177,15 @@ def test_list_raises_frontmatter_drift(home, project):
     assert "differs" not in clean_chunk
 
 
-def test_skill_md_manifest_lists_imports_and_runs(home, project):
-    folder = write_skill_md(
-        project / ".scrills",
-        "filed",
-        "---\nname: filed\ndescription: manual in a file\nversion: 1.2.3\n---\n\nprose body\n",
+def test_readme_manifest_lists_imports_and_runs(home, project):
+    write_scrill(
+        project / ".scrills", "filed",
+        "---\nname: filed\ndescription: manual in a file\nmetadata:\n  version: 1.2.3\n---\n\nprose body\n",
+        "def main():\n    print('ran')\n    return 0\n",
     )
-    (folder / "__init__.py").write_text("def main():\n    print('ran')\n    return 0\n")
     listing = scrills(["list"], home, project)
     assert "- filed: manual in a file" in listing.stdout
-    chunk = entry_chunk(listing.stdout, "- filed: manual in a file")
-    assert "announces nothing" not in chunk
-    assert "(no " not in chunk
+    assert "(no " not in entry_chunk(listing.stdout, "- filed: manual in a file")
     assert "prose body" not in listing.stdout
     ran = scrills(["run", "filed"], home, project)
     assert ran.returncode == 0
@@ -2197,126 +2193,38 @@ def test_skill_md_manifest_lists_imports_and_runs(home, project):
     assert log_records(home, "filed")[-1]["imported"] == {"filed": "1.2.3"}
 
 
-def test_skill_md_is_the_manual_and_a_manifest_docstring_is_ignored_aloud(home, project):
-    folder = write_scrill(
-        project / ".scrills",
-        "twice",
-        "---\nname: twice\ndescription: from the docstring\nversion: 0.1.0\n---",
-        "VALUE = 1",
-    )
-    (folder / "SKILL.md").write_text("---\nname: twice\ndescription: from the file\nversion: 0.2.0\n---\n")
+def test_readme_is_the_only_metadata_source(home, project):
+    folder = write_scrill(project / ".scrills", "paired", "---\nname: paired\ndescription: from README\nversion: 1.0.0\n---")
+    other = "---\nname: wrong\ndescription: not the manual\nversion: 9.0.0\n---"
+    (folder / "SKILL.md").write_text(other)
+    (folder / "__init__.py").write_text(repr(other) + "\nVALUE = 2\n")
     listing = scrills(["list"], home, project)
-    assert "- twice: from the file" in listing.stdout
-    assert "from the docstring" not in listing.stdout
-    assert "ignored: SKILL.md is the manual, the docstring explains the file" in listing.stdout
-    used = scrills(["py"], home, project, stdin="from scrills import twice\ntwice.VALUE")
+    assert "- paired: from README" in listing.stdout
+    assert "not the manual" not in listing.stdout
+    used = scrills(["py"], home, project, stdin="from scrills import paired\npaired.VALUE")
     assert used.returncode == 0
-    assert used.stdout == "1\n"
-    assert log_records(home, "py")[-1]["imported"] == {"twice": "0.2.0"}
+    assert log_records(home, "py")[-1]["imported"] == {"paired": "1.0.0"}
 
 
-def test_a_prose_skill_md_is_still_the_manual(home, project):
-    folder = write_scrill(
-        project / ".scrills",
-        "mixed",
-        "---\nname: mixed\ndescription: from the docstring\nversion: 0.1.0\n---",
-        "VALUE = 3",
-    )
-    (folder / "SKILL.md").write_text("readme prose only, no fences\nsecond line\n")
-    listing = scrills(["list"], home, project)
-    assert "- mixed: readme prose only, no fences" in listing.stdout
-    assert "from the docstring" not in listing.stdout
-    chunk = entry_chunk(listing.stdout, "- mixed: readme prose only, no fences")
-    assert "(no frontmatter - open SKILL.md with" in chunk
-    assert "ignored: SKILL.md is the manual, the docstring explains the file" in chunk
-    used = scrills(["py"], home, project, stdin="from scrills import mixed\nmixed.VALUE")
-    assert used.returncode == 0
-    assert log_records(home, "py")[-1]["imported"] == {"mixed": None}
-
-
-def test_skill_md_beside_a_prose_docstring_is_silent(home, project):
-    folder = write_scrill(project / ".scrills", "paired", "helper notes for readers", "VALUE = 2")
-    (folder / "SKILL.md").write_text("---\nname: paired\ndescription: d\nversion: 0.1.0\n---\n")
-    listing = scrills(["list"], home, project)
-    assert "- paired: d" in listing.stdout
-    assert "helper notes" not in listing.stdout
-    chunk = entry_chunk(listing.stdout, "- paired: d")
-    assert "SKILL.md wins" not in chunk
-    assert "(no " not in chunk
-
-
-def test_skill_md_manifest_survives_a_broken_init(home, project):
-    folder = write_skill_md(
-        project / ".scrills",
-        "brokefile",
-        "---\nname: brokefile\ndescription: still described\nversion: 0.1.0\n---\n",
-    )
-    (folder / "__init__.py").write_text("def main(:\n    pass\n")
+def test_readme_manifest_survives_a_broken_init(home, project):
+    write_scrill(project / ".scrills", "brokefile", "---\nname: brokefile\ndescription: still described\nversion: 0.1.0\n---", "def main(:\n    pass\n")
     listing = scrills(["list"], home, project)
     assert "- brokefile: still described" in listing.stdout
     assert "doesn't parse" in listing.stdout
 
 
-def test_skill_md_notices_unclosed_prose_and_name_drift(home, project):
-    unclosed = write_skill_md(project / ".scrills", "unfiled", "---\nname: unfiled\ndescription: d")
-    (unclosed / "__init__.py").write_text("VALUE = 1\n")
-    prose = write_skill_md(project / ".scrills", "prosefile", "a readme-ish first line\nsecond-prose-line\n")
-    (prose / "__init__.py").write_text("VALUE = 2\n")
-    drifted = write_skill_md(project / ".scrills", "renamed", "---\nname: rename\ndescription: d\nversion: 0.1.0\n---\n")
-    (drifted / "__init__.py").write_text("VALUE = 3\n")
-    listing = scrills(["list"], home, project)
-    assert "- unfiled:\n" in listing.stdout
-    assert "never closes" in listing.stdout
-    assert "- prosefile: a readme-ish first line" in listing.stdout
-    assert "second-prose-line" not in listing.stdout
-    assert "(no frontmatter" in listing.stdout
-    assert "announces nothing" not in listing.stdout
-    assert "(frontmatter name 'rename' differs from folder 'renamed' - the folder name is the import name)" in listing.stdout
-
-
-def test_nested_metadata_version_is_accepted_in_both_homes(home, project):
-    write_scrill(
-        project / ".scrills",
-        "nested",
-        '---\nname: nested\ndescription: d\nmetadata:\n  version: "3.1.4"\n---',
-        "VALUE = 1",
-    )
-    filed = write_skill_md(
-        project / ".scrills",
-        "nestedfile",
-        '---\nname: nestedfile\ndescription: d\nmetadata:\n  version: "2.7.1"\n---\n',
-    )
-    (filed / "__init__.py").write_text("VALUE = 2\n")
-    listing = scrills(["list"], home, project)
-    assert "(no version" not in listing.stdout
-    used = scrills(["py"], home, project, stdin="from scrills import nested, nestedfile\nnested.VALUE + nestedfile.VALUE")
-    assert used.returncode == 0
-    assert used.stdout == "3\n"
-    assert log_records(home, "py")[-1]["imported"] == {"nested": "3.1.4", "nestedfile": "2.7.1"}
-
-
 def test_nested_metadata_fields_never_become_top_level(home, project):
     write_scrill(
-        project / ".scrills",
-        "shaded",
+        project / ".scrills", "shaded",
         "---\nname: shaded\ndescription: top level d\nversion: 0.1.0\nmetadata:\n  name: other\n  description: nested d\n---",
         "VALUE = 1",
     )
-    filed = write_skill_md(
-        project / ".scrills",
-        "shadedfile",
-        "---\nname: shadedfile\ndescription: top level file d\nversion: 0.1.0\nmetadata:\n  name: otherfile\n  description: nested file d\n---\n",
-    )
-    (filed / "__init__.py").write_text("VALUE = 2\n")
     listing = scrills(["list"], home, project)
     assert "- shaded: top level d" in listing.stdout
-    assert "- shadedfile: top level file d" in listing.stdout
     assert "nested d" not in listing.stdout
-    assert "nested file d" not in listing.stdout
-    for entry in ("- shaded: top level d", "- shadedfile: top level file d"):
-        chunk = entry_chunk(listing.stdout, entry)
-        assert "differs from folder" not in chunk
-        assert "(no " not in chunk
+    chunk = entry_chunk(listing.stdout, "- shaded: top level d")
+    assert "differs from folder" not in chunk
+    assert "(no " not in chunk
 
 
 def test_unrelated_nested_version_is_not_the_version(home, project):
@@ -2402,10 +2310,9 @@ def test_unclosed_frontmatter_version_is_null_in_the_registry(home, project):
     assert log_records(home, "py")[-1]["imported"] == {"openend": None}
 
 
-def test_indented_docstring_nested_version_agrees_everywhere(home, project):
-    folder = Path(project) / ".scrills" / "innerdoc"
-    folder.mkdir(parents=True)
-    doc = textwrap.indent('---\nname: innerdoc\ndescription: d\nmetadata:\n  version: "4.4.4"\n---', "    ")
+def test_indented_docstrings_never_supply_metadata(home, project):
+    folder = write_scrill(project / ".scrills", "innerdoc", '---\nname: innerdoc\ndescription: d\nmetadata:\n  version: "4.4.4"\n---')
+    doc = textwrap.indent('---\nname: other\ndescription: not the manual\nversion: "9.9.9"\n---', "    ")
     (folder / "__init__.py").write_text(f'"""\n{doc}\n"""\nVALUE = 1\n')
     listing = scrills(["list"], home, project)
     chunk = entry_chunk(listing.stdout, "- innerdoc: d")
@@ -2436,12 +2343,12 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
 
 @pytest.mark.parametrize(
     "missing",
-    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/SKILL.md"],
+    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/SKILL.md"],
 )
 def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
     repo = Path(CLI).resolve().parent.parent.parent
     clone = tmp_path / missing.replace("/", "-")
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/SKILL.md"):
+    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
@@ -2601,8 +2508,8 @@ def test_list_raises_folders_that_never_resolve(home, project):
     assert "- deep-research:" not in listing.stdout
     assert "deep-research" in listing.stdout
     assert "not a valid Python identifier" in listing.stdout
-    assert "skillonly" in listing.stdout
-    assert "skill folder" in listing.stdout
+    assert "skillonly" not in listing.stdout
+    assert "skill folder" not in listing.stdout
     assert "entryless" in listing.stdout
     assert "no __init__.py" in listing.stdout
     assert "dangling" in listing.stdout
@@ -2621,7 +2528,7 @@ def test_run_refusal_explains_ignored_folders_and_strays(home, project):
     assert "not a valid Python identifier" in result.stderr
     result = scrills(["run", "skillonly"], home, project)
     assert result.returncode == 2
-    assert "skill folder" in result.stderr
+    assert "no scrill named skillonly" in result.stderr
     result = scrills(["run", "straymod"], home, project)
     assert result.returncode == 2
     assert "stray module" in result.stderr
@@ -2666,7 +2573,7 @@ def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
 def test_boot_and_resolver_are_real_parseable_files():
     # the boot and the resolver source live as real files beside the CLI: they must compile,
     # under the 3.9 grammar too (a stock launcher may be old, and the venv may have been built by one)
-    for name in ("_boot.py", "_scrills_pth.py"):
+    for name in ("_boot.py", "_scrills_pth.py", "_manifest.py"):
         source = (Path(CLI).parent / name).read_text()
         ast.parse(source, filename=name)
         ast.parse(source, filename=name, feature_version=(3, 9))

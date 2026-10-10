@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # scrills: skills you import instead of read. Stdlib only, driven from bash in any harness.
 #
-# A scrill is a folder in a .scrills directory: <name>/__init__.py plus its manual, opening with
-# SKILL.md-style frontmatter. Two files, two purposes: a SKILL.md beside __init__.py is the
-# manual - the one a person reads - and a docstring explains its own file; without a SKILL.md
-# the module docstring carries the manual (the one-file shape). When SKILL.md exists, a
-# frontmattered docstring is ignored as a manifest and list says so. Two layers, project over user: the nearest
+# A scrill is a folder in a .scrills directory: <name>/__init__.py and a required README.md.
+# README is the human/agent manual and the only metadata source; entry docstrings explain
+# the API and implementation. There are no legacy manual fallbacks. _manifest.py is the one
+# restricted parser used by list, read and the registry, loaded by installation path under -I.
+# read prints the entire README and entry source, never importing the target, creating a venv
+# or recording a run. Follow relevant implementation imports before execution: reading the
+# entry alone is not a complete review. Two layers, project over user: the nearest
 # .scrills walking up from the cwd (never the user library, never the default ~/.scrills even
 # when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
 # aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
@@ -86,10 +88,10 @@
 # Exit codes: 0 ok; a run's own choice passes through (run: main()'s int, wrapped to 0..255 as
 # the OS wraps it; py: a SystemExit's code the same way); 1 an exception in scrill or py code;
 # 2 usage, unknown scrill, or not runnable; install exits with pip's code.
-import ast
 import datetime
 import fcntl
 import glob
+import importlib.util
 import json
 import keyword
 import os
@@ -103,8 +105,11 @@ os.environ["SCRILLS_CLI"] = SCRIPT
 SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
 BOOT_FILE = os.path.join(os.path.dirname(SCRIPT), "_boot.py")
 PTH_SOURCE = os.path.join(os.path.dirname(SCRIPT), "_scrills_pth.py")
+MANIFEST_FILE = os.path.join(os.path.dirname(SCRIPT), "_manifest.py")
+_MANIFEST = None
 USAGE = """usage: scrills <verb>
   list               the library, one "- name: description" line per scrill
+  read <name>        read the full README and entry source, without importing
   py                 run Python from stdin, once, with the library importable
   run <name> ...     run a scrill that defines main() as a program
   install <pkg> ...  install a package into the shared environment (pip)
@@ -240,15 +245,15 @@ def ignored_entries(directory):
             continue
         init = os.path.join(entry, "__init__.py")
         if not name.isidentifier():
-            if os.path.lexists(init) or os.path.isfile(os.path.join(entry, "SKILL.md")):
+            if os.path.lexists(init) or os.path.lexists(os.path.join(entry, "README.md")):
                 found.append((name, "not a valid Python identifier - the folder name is the import name; rename it, e.g. - to _"))
             continue
         if os.path.isfile(init):
             continue
         if os.path.lexists(init):
             found.append((name, "__init__.py is a dangling symlink or not a file"))
-        elif os.path.isfile(os.path.join(entry, "SKILL.md")):
-            found.append((name, "a skill folder - add __init__.py to make it a scrill (today it imports as an empty namespace package)"))
+        elif os.path.lexists(os.path.join(entry, "README.md")):
+            found.append((name, "a manual without an entry - add __init__.py to make it a scrill (today it imports as an empty namespace package)"))
         else:
             try:
                 has_python = any(item.endswith(".py") for item in os.listdir(entry))
@@ -305,155 +310,70 @@ def read_text(path):
         return None
 
 
-def read_source(path):
-    try:
-        with open(path, "rb") as handle:
-            return handle.read()
-    except OSError:
-        return None
-
-
-def classify(text):
-    lines = text.strip().split("\n")
-    if lines[0].strip() == "---":
-        for end in range(1, len(lines)):
-            if lines[end].strip() == "---":
-                return lines[: end + 1], "frontmatter"
-        return [lines[0]], "unclosed"
-    first = next((line.strip() for line in lines if line.strip()), "")
-    return ([first] if first else []), "prose"
-
-
-def manifest(entry):
-    skill_lines = skill_kind = None
-    skill_text = read_text(os.path.join(os.path.dirname(entry), "SKILL.md"))
-    if skill_text is not None:
-        skill_lines, skill_kind = classify(skill_text)
-    source = read_source(entry)
-    problem = doc = None
-    if source is None:
-        problem = "(unreadable)"
-    else:
+def manifest_module():
+    global _MANIFEST
+    if _MANIFEST is None:
         try:
-            doc = ast.get_docstring(ast.parse(source))
-        except (SyntaxError, ValueError) as error:
-            problem = f"(doesn't parse: {error})"
-    doc_lines, doc_kind = classify(doc) if doc is not None else (None, None)
-    if skill_kind is not None:
-        extra = [problem] if problem else []
-        if doc_kind in ("frontmatter", "unclosed"):
-            extra.append("(the docstring also opens with frontmatter - ignored: SKILL.md is the manual, the docstring explains the file)")
-        return (skill_lines or ["(empty SKILL.md)"]), skill_kind, True, extra
-    if doc_kind is not None:
-        return (doc_lines or ["(empty docstring)"]), doc_kind, False, []
-    return [problem or "(no module docstring, so it announces nothing)"], None, False, []
+            spec = importlib.util.spec_from_file_location("_scrills_manifest", MANIFEST_FILE)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        except (OSError, SyntaxError) as error:
+            fail(f"scrills: cannot load {MANIFEST_FILE}: {error}\nReinstall keeping the scrills/ folder intact")
+        _MANIFEST = module
+    return _MANIFEST
 
 
-def unquote(value):
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
-    return value
-
-
-def unsupported_shape(value):
-    if re.match(r"^[|>][+-]?\d*$", value):
-        return "uses a YAML block scalar"
-    if value[:1] in ("[", "{"):
-        return "is a structured value"
-    return None
-
-
-FIELD_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
-
-
-def frontmatter_fields(lines):
-    if len(lines) < 2 or lines[0].strip() != "---" or lines[-1].strip() != "---":
-        return {}, []
-    consumed = ("name", "description", "version", "compatibility")
-    fields = {}
-    problems = []
-    metadata_version = None
-    version_declared = False
-    in_metadata = False
-    metadata_indent = None
-    current = None
-    for raw in lines[1:-1]:
-        if not raw.strip():
-            current = None
-            continue
-        if raw[:1] not in (" ", "\t"):
-            in_metadata = False
-            current = None
-            match = FIELD_KEY.match(raw.strip())
-            if match is None:
-                continue
-            key, value = match.group(1), match.group(2).strip()
-            if key == "metadata":
-                in_metadata = True
-                continue
-            if key == "version":
-                version_declared = True
-            if key not in consumed:
-                continue
-            shape = unsupported_shape(value)
-            if shape is not None:
-                problems.append(f"({key} {shape} - scrills frontmatter takes one-line values)")
-                continue
-            fields[key] = unquote(value)
-            current = key
-            continue
-        depth = len(raw) - len(raw.lstrip())
-        if in_metadata:
-            if metadata_indent is None:
-                metadata_indent = depth
-            if depth != metadata_indent:
-                continue
-            match = FIELD_KEY.match(raw.strip())
-            if match is not None and match.group(1) == "version" and metadata_version is None:
-                value = match.group(2).strip()
-                if value and unsupported_shape(value) is None:
-                    metadata_version = unquote(value)
-            continue
-        if current is not None:
-            problems.append(f"({current} continues on the next line - scrills frontmatter takes one-line values)")
-            fields.pop(current, None)
-            current = None
-    if version_declared and metadata_version is not None:
-        problems.append("(version declared in both places - keep one; the top-level value wins)")
-    if not fields.get("version") and metadata_version is not None:
-        fields["version"] = metadata_version
-    return fields, problems
-
-
-def entry_description(lines, kind):
-    if kind == "frontmatter":
-        fields, _ = frontmatter_fields(lines)
-        return fields.get("description", "")
-    if kind == "unclosed":
-        return ""
-    return lines[0]
-
-
-def notices(name, lines, kind, filed=False):
-    found = []
+def entry_documents(name, entry):
+    reader = manifest_module()
+    manual = reader.read_manual(entry)
+    source, notices, error = reader.read_source(entry)
+    notices = manual.metadata.notices + notices
     if keyword.iskeyword(name):
-        found.append(f"(python keyword - `from scrills import {name}` won't parse; rename, or reach it via run/importlib)")
-    if kind == "unclosed":
-        return found + ["(frontmatter never closes - missing the second ---)"]
-    if kind == "prose":
-        where = "SKILL.md" if filed else "the docstring or a SKILL.md beside it"
-        return found + [f"(no frontmatter - open {where} with ---, name/description/version, ---)"]
-    if kind != "frontmatter":
-        return found
-    fields, problems = frontmatter_fields(lines)
-    found.extend(problems)
-    stated = fields.get("name", "")
-    if stated and stated != name:
-        found.append(f"(frontmatter name '{stated}' differs from folder '{name}' - the folder name is the import name)")
-    for key in ("description", "version"):
-        if not fields.get(key):
-            found.append(f"(no {key} in frontmatter)")
-    return found
+        notices.append(f"(python keyword - `from scrills import {name}` won't parse; rename, or reach it via run/importlib)")
+    return manual, source, notices, manual.error or error
+
+
+def resolve_entry(name, found, verb):
+    resolved = resolved_providers(found)
+    provider = resolved.get(name)
+    if provider is not None and provider["stray"]:
+        stray = provider["entry"]
+        fail(f"scrills {verb}: {name} is a stray module - not a scrill; import it from py or fold it into {os.path.join(os.path.dirname(stray), name, '__init__.py')} with a README.md", 2)
+    if provider is None:
+        for _, directory in found:
+            reason = dict(ignored_entries(directory)).get(name)
+            if reason is not None:
+                fail(f"scrills {verb}: {name} can't {verb} - {reason}", 2)
+        available = ", ".join(sorted(entry for entry, detail in resolved.items() if not detail["stray"])) or "none yet"
+        fail(f"scrills {verb}: there's no scrill named {name} (available: {available})", 2)
+    return provider
+
+
+def cmd_read(argv):
+    if len(argv) != 1:
+        fail("usage: scrills read <name>", 2)
+    name = argv[0]
+    _, found, foreign = layers()
+    warn_foreign(foreign)
+    provider = resolve_entry(name, found, "read")
+    manual, source, notices, error = entry_documents(name, provider["entry"])
+    print(f"scrill: {name}\nlayer: {provider['layer']}\ndirectory: {os.path.dirname(provider['entry'])}")
+    print("Reading material, not execution or a security verdict. Follow relevant imports before use.")
+    for notice in notices:
+        print(f"scrills read: {notice}", file=sys.stderr)
+    for path, text in ((manual.path, manual.text), (provider["entry"], source)):
+        filename = os.path.basename(path)
+        if text is None:
+            print(f"\n=== {filename} - unavailable: {path} ===")
+            continue
+        print(f"\n=== {filename} - {len(text.splitlines())} lines - {path} ===")
+        sys.stdout.write(text)
+        if text and not text.endswith("\n"):
+            sys.stdout.write("\n")
+        print(f"=== end {filename} ===")
+    if error is not None:
+        sys.exit(1)
 
 
 def venv_python(home):
@@ -893,8 +813,9 @@ def boot_ctx(home, verb, card, lock_fd, started, run_id, trace, flags, known):
 
 
 def boot_path():
-    if not os.path.isfile(BOOT_FILE):
-        fail(f"scrills: {BOOT_FILE} is missing - reinstall keeping the scrills/ folder intact")
+    for path in (BOOT_FILE, MANIFEST_FILE):
+        if not os.path.isfile(path):
+            fail(f"scrills: {path} is missing - reinstall keeping the scrills/ folder intact")
     return BOOT_FILE
 
 
@@ -956,18 +877,10 @@ def cmd_run(argv):
     warn_foreign(foreign)
     warn_shadows(found)
     warn_lost_project(home, found)
-    resolved = resolved_providers(found)
-    provider = resolved.get(name)
-    if provider is not None and provider["stray"]:
-        stray = provider["entry"]
-        fail(f"scrills run: {name} is a stray module - not runnable; import it from py (from scrills import {name}) or fold it into {os.path.join(os.path.dirname(stray), name, '__init__.py')}", 2)
-    if provider is None:
-        for _, directory in found:
-            reason = dict(ignored_entries(directory)).get(name)
-            if reason is not None:
-                fail(f"scrills run: {name} can't run - {reason}", 2)
-        available = ", ".join(sorted(entry for entry, detail in resolved.items() if not detail["stray"])) or "none yet"
-        fail(f"scrills run: there's no scrill named {name} (available: {available})", 2)
+    provider = resolve_entry(name, found, "run")
+    manual = manifest_module().read_manual(provider["entry"])
+    if manual.error is not None:
+        fail(f"scrills run: {name} is not ready - {manual.error}", 2)
     python = ensure_runtime(home)
     export_layers(found)
     run_id = os.urandom(8).hex()
@@ -1009,9 +922,9 @@ def cmd_list(argv):
     layer_dirs = dict(found)
     project_strays = {stem for label, directory in found if label == "project" for stem in stray_scan(directory)}
     for name in sorted(merged):
-        lines, kind, filed, extra = manifest(merged[name]["entry"])
-        print(f"- {name}: {entry_description(lines, kind)}".rstrip())
-        for notice in notices(name, lines, kind, filed) + extra:
+        manual, _, notices, _ = entry_documents(name, merged[name]["entry"])
+        print(f"- {name}: {manual.metadata.description}".rstrip())
+        for notice in notices:
             print(f"  {notice}")
     for name, layer in shadowed:
         print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
@@ -1205,6 +1118,8 @@ def main():
         print(version())
     elif verb == "list":
         cmd_list(rest)
+    elif verb == "read":
+        cmd_read(rest)
     elif verb == "py":
         cmd_py(rest)
     elif verb == "run":

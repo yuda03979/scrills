@@ -1,10 +1,4 @@
-"""
----
-name: broken
-description: Deliberately dirty, to prove default toolchains stay out of .scrills.
-version: 0.1.0
----
-"""
+"""Deliberately dirty imports and bad() to test default toolchain exclusions."""
 import definitely_not_a_real_package
 import os
 import sys as unused_alias

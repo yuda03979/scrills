@@ -3,15 +3,21 @@
 # already synthesized the `scrills` package, the run context arrives as JSON in SCRILLS_BOOT_CTX
 # (popped immediately, so nothing the run spawns ever sees it), and a py snippet arrives on stdin.
 # For run it erases this file's __main__ identity before user code, so multiprocessing never
-# selects _boot.py as a spawn/forkserver init_main_from_path. Everything here is plumbing:
-# tracebacks are trimmed of these frames and error_at never points into this file.
-import ast, atexit, asyncio, importlib, inspect, json, os, sys, time, traceback, types
+# selects _boot.py as a spawn/forkserver init_main_from_path. The shared README reader is
+# loaded from this installation, never via sys.path. Everything here is plumbing:
+# tracebacks are trimmed of these frames and error_at never points into these files.
+import ast, atexit, asyncio, importlib.util, inspect, json, os, sys, time, traceback, types
 BOOT_FILE = os.path.realpath(__file__)
+MANIFEST_FILE = os.path.join(os.path.dirname(BOOT_FILE), '_manifest.py')
 RAW_CTX = os.environ.pop('SCRILLS_BOOT_CTX', None)
 if RAW_CTX is None:
     sys.stderr.write("scrills: _boot.py is the scrills command's exec target, not a command itself - run scrills instead\n")
     sys.exit(2)
 CTX = json.loads(RAW_CTX)
+manifest_spec = importlib.util.spec_from_file_location('_scrills_manifest', MANIFEST_FILE)
+manifest = importlib.util.module_from_spec(manifest_spec)
+sys.modules[manifest_spec.name] = manifest
+manifest_spec.loader.exec_module(manifest)
 CARD = CTX['card']
 CARD_PATH = CTX['card_path']
 LOCK_FD = CTX['lock_fd']
@@ -41,7 +47,7 @@ LAYER_DIRS = [path for path in os.environ.get('SCRILLS_LAYERS', '').split(os.pat
 def _plumbing(filename):
     if filename.startswith('<'):
         return filename != '<py>'
-    if os.path.realpath(filename) == BOOT_FILE:
+    if os.path.realpath(filename) in (BOOT_FILE, MANIFEST_FILE):
         return True
     if any(filename.startswith(layer + os.sep) for layer in LAYER_DIRS):
         return False
@@ -89,7 +95,7 @@ def _note_error(error):
                 filename = tb.tb_frame.f_code.co_filename
                 if ours(filename):
                     scoped = (filename, tb.tb_lineno)
-                elif not filename.startswith('<') and os.path.realpath(filename) != BOOT_FILE:
+                elif not filename.startswith('<') and os.path.realpath(filename) not in (BOOT_FILE, MANIFEST_FILE):
                     last = (filename, tb.tb_lineno)
                 tb = tb.tb_next
             spot = scoped or last
@@ -97,56 +103,6 @@ def _note_error(error):
             OUTCOME['error_at'] = spot[0] + ':' + str(spot[1])
     except Exception:
         pass
-def _fm_value(value):
-    if not value or value[0] in ('[', '{'):
-        return None
-    if value[0] in ('|', '>'):
-        rest = value[1:]
-        if rest[:1] in ('+', '-'):
-            rest = rest[1:]
-        if rest == '' or rest.isdigit():
-            return None
-    if len(value) >= 2 and value[0] == value[-1] and value[:1] in ('"', "'"):
-        value = value[1:-1]
-    return value or None
-def _fm_version(text):
-    lines = text.strip().splitlines()
-    if not lines or lines[0].strip() != '---':
-        return None
-    closed = False
-    top = nested = None
-    in_metadata = False
-    metadata_indent = None
-    for raw in lines[1:]:
-        line = raw.strip()
-        if line == '---':
-            closed = True
-            break
-        if not line:
-            continue
-        if raw[:1] not in (' ', '\t'):
-            in_metadata = line == 'metadata:'
-            if line.startswith('version:') and top is None:
-                top = _fm_value(line[len('version:'):].strip())
-            continue
-        if in_metadata:
-            depth = len(raw) - len(raw.lstrip())
-            if metadata_indent is None:
-                metadata_indent = depth
-            if depth == metadata_indent and line.startswith('version:') and nested is None:
-                nested = _fm_value(line[len('version:'):].strip())
-    if not closed:
-        return None
-    return top if top is not None else nested
-def _version_of(module):
-    entry = getattr(module, '__file__', None)
-    if entry:
-        try:
-            with open(os.path.join(os.path.dirname(entry), 'SKILL.md'), encoding='utf-8', errors='replace') as handle:
-                return _fm_version(handle.read())
-        except OSError:
-            pass
-    return _fm_version(inspect.cleandoc(getattr(module, '__doc__', None) or ''))
 def _write_record():
     if CARD is None or 'exit' not in OUTCOME or os.getpid() != BOOT_PID:
         return
@@ -168,7 +124,7 @@ def _write_record():
                 record[key] = OUTCOME[key]
         names = sorted(set(name.split('.')[1] for name in sys.modules if name.startswith('scrills.')))
         if names:
-            record['imported'] = dict((name, _version_of(sys.modules.get('scrills.' + name))) for name in names)
+            record['imported'] = dict((name, manifest.version_of(sys.modules.get('scrills.' + name))) for name in names)
         lock = None
         try:
             lock = os.open(LOG_LOCK, os.O_RDWR | os.O_CREAT, 0o644)

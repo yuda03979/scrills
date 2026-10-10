@@ -9,18 +9,21 @@ This file is for a coding agent changing this repository. If you want to *use* s
 scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
 scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
 scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
+scrills/scripts/_manifest.py    README metadata/source reading, shared by CLI and boot
 scrills/SKILL.md          the manual agents read; also where the version lives
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
 install.sh                command symlink plus detected harness skill links, nothing else
 ```
 
-The command is a symlink into this repo, and the CLI finds `SKILL.md`, `_boot.py` and
-`_scrills_pth.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
+The command is a symlink into this repo, and the CLI finds `SKILL.md`, `_boot.py`,
+`_scrills_pth.py` and `_manifest.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
 relationship. The boot and resolver are real files, never source-in-a-string: edit them
 directly, lint them, and trust the compile guard in the suite. The run context reaches the boot
 as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin - argv
-carries no code.
+carries no code. The shared manifest module is loaded by its absolute installation path,
+not by adding a directory to `sys.path` (`-I` excludes sibling imports). Keep one parser:
+listing, static reading and registry versions must never interpret README differently.
 
 ## Rules that are not negotiable
 
@@ -29,34 +32,38 @@ carries no code.
   `/usr/bin/python3`) reads the CLI before anything relaunches onto the venv, and the venv itself
   may have been built by one. Check with
   `python3 -c "import ast, pathlib; [ast.parse(p.read_text(), feature_version=(3,9)) for p in [pathlib.Path('scrills/scripts/scrills'), *pathlib.Path('scrills/scripts').glob('*.py')]]"`.
-- **Docstrings are the product.** A scrill's module and function docstrings are its manual —
-  `help()` renders them, `scrills list` parses them (a `SKILL.md` beside `__init__.py` is the
-  manual when present — the docstring then explains its own file, and a frontmattered one is
-  ignored as a manifest, aloud). Never strip a docstring in a scrill you write. Elsewhere,
-  prefer clear names over comments; the CLI keeps its explanation in one block at the top of
-  the file and none below it.
+- **README and docstrings are product surface, with distinct roles.** Every scrill requires
+  `README.md` and `__init__.py`. README is the human/agent manual and sole metadata source;
+  entry/module/function docstrings guide API use and implementation reading. No SKILL.md or
+  docstring-manual fallback. `scrills read` prints both complete files without importing;
+  `help()` requires an import and never replaces that initial read. Never strip useful
+  docstrings. Elsewhere prefer clear names over comments; the CLI keeps its explanation in
+  one block at the top of the file and none below it.
 - **The version lives once**, in `scrills/SKILL.md` frontmatter under `metadata.version`. The CLI
   reads it there; nothing else states a version number. Bump it for anything worth shipping.
 - **The frontmatter follows the Agent Skills spec**: only `name`, `description`, `license`,
   `compatibility`, `metadata` and `allowed-tools`, with `name` matching the directory. A test
-  enforces it. Scrill *docstrings* deliberately differ — see below.
+  enforces it. Individual scrill READMEs deliberately differ — see below.
 - **`.scrills/` folders are live code**, not fixtures. `tests/fixtures/ide/` exists only to
   prove editors and linters stay out of them.
 
-## Scrills are not skills, in one deliberate way
+## Scrill manuals are not native harness skills
 
-A scrill's manual — a `SKILL.md` beside `__init__.py`, or the docstring in the one-file shape — looks like a
-SKILL.md and differs on purpose: the name is a **Python identifier**, so `_` where a skill name
-would have `-` (the folder name is the import name, and an identifier can't hold a hyphen).
-The consumed fields (`name`, `description`, `version`, `compatibility`) are parsed as one-line
-values — a restricted subset of YAML, never a full parser; nested, block or structured values
-are raised by `list`, not guessed at. `version` alone may also sit under `metadata:` as the
-spec nests it — declared in both places, the top-level one wins, aloud.
+A scrill's `README.md` uses Skills-style metadata, but the filename and Python identifier
+names are deliberately different. Only the product's `scrills/SKILL.md` is an Agent Skill;
+its filename, version source and installation links stay unchanged.
 
-A scrill's manual is never validated as a skill — a skill folder becomes a scrill by adding
-`__init__.py`, and anything that exports a scrill as a skill maps `_` → `-` at that boundary.
-Don't "fix" scrill names to match the skills spec — only `scrills/SKILL.md` must validate,
-because only that file is claimed as a skill.
+The shared reader consumes one-line text for `name`, `description`, `version`, `compatibility`,
+plus direct `metadata.version`. It is not a full YAML parser. Comments and blank lines cannot
+hide continuations; quoted strings are decoded according to the documented subset; unsupported
+shapes and duplicate consumed keys are invalid, not guessed. A declared top-level version is
+authoritative even when empty/invalid (null, never silently rescued by metadata.version).
+README read failures never fall back to another file or `__doc__`.
+
+Resolve the winning Python provider before validating README: a project package missing its
+manual must be refused, never replaced by a lower user package. Imports themselves remain
+native Python, not a format gate or sandbox. Registry versions are sampled from README at
+finalization; do not turn this field into an import-time provenance claim.
 
 ## Tests
 
@@ -64,7 +71,7 @@ because only that file is claimed as a skill.
 uv run --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **143 passed** on Python 3.13; Python 3.9 reports **141 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **212 passed** on Python 3.13; Python 3.9 reports **210 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 

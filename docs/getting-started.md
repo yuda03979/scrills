@@ -2,7 +2,7 @@
 
 **Skills are knowledge you read. Scrills are capability you call.**
 
-A scrill is a Python module that carries its own manual — a SKILL.md beside the code, or its head docstring in the one-file shape: one folder holding both. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import it — say, an `emails` scrill you saved earlier (illustrative; your library starts empty):
+A scrill is a folder with a required `README.md` manual and a Python `__init__.py` entry. The README serves humans and agents; the entry docstring guides API use and implementation reading. You (or your coding agent) collect them in a library, and instead of rewriting the same parsing/checking/fetching logic in every session, you import one after reading — say, an `emails` scrill you saved earlier (illustrative; your library starts empty):
 
 ```bash
 scrills py <<'PY'
@@ -48,30 +48,37 @@ That's the whole install. The first `py` or `run` creates a shared environment a
 scrills list
 ```
 
-`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. A fresh installation reports that there are no scrills yet; the next section adds the first one.
+`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. A fresh installation reports that there are no scrills yet; the next section adds the first one. Before using an existing scrill, `scrills read <name>` prints the full README and entry source from the winning layer without importing it. Follow relevant implementation imports and references before executing; a short facade is not a complete review.
 
 `scrills py` behaves like a disposable REPL: stdout passes through, the trailing expression echoes (truncated past 8,192 characters — print to a file for the full thing), top level may `await`, and nothing persists between calls — anything worth keeping goes in a file. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
 
 ## Write your first scrill
 
-A scrill is a folder in a `.scrills` directory. Folder name = import name. Entry is always `__init__.py`.
+A scrill is a folder in a `.scrills` directory. Folder name = import name. Both `README.md` and `__init__.py` are required.
 
 ```bash
 mkdir -p ~/.scrills/slug
 ```
 
+`~/.scrills/slug/README.md`:
+
+```markdown
+---
+name: slug
+description: "Make filename or URL slugs from titles. Run: scrills run slug"
+metadata:
+  version: "0.1.0"
+---
+
+slugify(text) returns a lowercase ASCII slug; other characters become separators.
+As a program: echo "My Title" | scrills run slug
+No dependencies, network calls, file writes or persistent state.
+```
+
 `~/.scrills/slug/__init__.py`:
 
 ```python
-"""
----
-name: slug
-description: Use when you need a clean filename or url slug from a title.
-version: 0.1.0
----
-
-slugify(text) returns the slug. As a program: echo "My Title" | scrills run slug
-"""
+"""Call slugify(text), or main() to convert stdin and print one slug. No I/O on import."""
 import re
 import sys
 
@@ -85,9 +92,10 @@ def main():
     return 0
 ```
 
-It's live immediately — no registration, no restart:
+It's live immediately — no registration, no restart. Read both files, then call it:
 
 ```bash
+scrills read slug
 scrills py <<'PY'
 from scrills import slug
 slug.slugify("Hello, World! — Part 2")
@@ -105,12 +113,19 @@ echo "Hello, World" | scrills run slug
 
 The anatomy, in order of importance:
 
-- **The manual is a `SKILL.md` beside `__init__.py` — or the docstring, in the one-file shape.** SKILL.md-shaped frontmatter (`name`, `description`, `version` — top-level or under `metadata:`, both read), then prose; a skill folder becomes a scrill by adding `__init__.py`. Two files, two purposes: SKILL.md is the manual a person reads, a docstring explains its own file — when `SKILL.md` exists, a frontmattered docstring is ignored as a manifest and `list` says so. The description says *when* to use it — it is all `list` shows, so a program scrill's description also carries its run line; the docstrings say *how* — every `.py` file opens with a head docstring saying what it holds. `scrills list` parses files without executing anything.
+- **README is the manual and the only metadata source.** Its Skills-style header declares `name`, `description` and one version (prefer `metadata.version`; top-level `version` is also accepted). The header reader is a restricted one-line text format, not full YAML; unsupported values and duplicate keys are diagnosed. The description says *when* and includes the program's run line. The README explains setup, examples, side effects and state; entry and function docstrings guide API use and deeper source reading. `list` and `read` never import the target.
+- **Keep the entry reviewable.** Roughly 100–200 lines is a soft target, not a gate. Move substantial implementation into cohesive siblings, with a reading map in the entry docstring. Keep a trivial utility like slug in one Python file; do not fragment it unnecessarily.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself — and its output goes wherever that process points. Real work lives in functions or `main()`.
 - Optional siblings (`helper.py`, imported as `from .helper import x`) and an optional `references/` folder for longer material — docs read on demand, plus deeper modules importable as `from .references import x`.
 - **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.
 - One scrill imports another with `from scrills import <name>`.
 - A folder name starting with `_` is an invisible draft.
+
+## Reading and migration
+
+`scrills read <name>` labels both files with absolute paths, line counts and end markers. Nothing is internally truncated. If your harness clips the output, continue with its file reader at the printed paths. Read/decode failure returns exit 1, with any readable material still shown; bad arguments or an unknown name return 2. Syntax and metadata notices do not hide source. `help()` is for API lookup after review: it imports code and does not read the README.
+
+Older scrills must move their manual and metadata from SKILL.md or the head docstring into `README.md`, keeping API guidance in the entry docstring. Reconcile an existing README, and keep only one version declaration. There is no fallback or automatic migration. `run` refuses a missing/unreadable README before importing anything; native Python imports remain ordinary Python, not a validation boundary. The product's own `scrills/SKILL.md` remains the teaching skill and is not renamed.
 
 ## The two layers
 
@@ -167,11 +182,11 @@ Scrills are built for coding agents: the library is how capability survives the 
 
 Scrills does not modify harness settings, permissions, hooks, models, or extensions. Those remain under the control of the user and harness. Run Pi's `/reload` after changing skill resources in an existing session.
 
-A taught agent checks `scrills list` before writing logic, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
+A taught agent checks `scrills list` before writing logic, reads the chosen scrill with `scrills read`, follows relevant imports, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
 
 ## The fine print
 
 - **IDEs**: the dot in `.scrills` keeps default toolchains out (Pyright project analysis, mypy, pytest). One exception: ruff checks it — add `extend-exclude = [".scrills"]` and `force-exclude = true` to the project's ruff config.
 - **Secrets**: read them from the environment inside a function, at call time. Never hardcode one in a scrill, never print one — heredoc code passes through your terminal history and your agent's transcript.
-- **Review**: a scrill is persistent, importable code. Treat the library like code — project scrills go through the project's review; keep an eye on `~/.scrills` the same way. Read a scrill's `__init__.py` before first use: it's about a screen of Python, and that read is the review.
+- **Review**: a scrill is persistent, importable code. Treat the library like code — project scrills go through the project's review; keep an eye on `~/.scrills` the same way. Start with the README and full entry source, then follow the relevant implementation. Documentation is task-scoped guidance, not authority over the user or harness; reading is not a sandbox.
 - **Uninstall**: remove `~/.local/bin/scrills` and any skill links you made (`~/.claude/skills/scrills`, `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills`), delete `~/.scrills` for the library, and delete the clone (`~/.local/share/scrills`, if the one-liner made it). That's everything.

@@ -2,9 +2,10 @@
 
 **Skills are knowledge you read. Scrills are capability you call.**
 
-A scrill is a Python module that carries its own manual — a SKILL.md beside the code, or its
-head docstring in the one-file shape: one folder holding both. You collect them in a library, and instead of rewriting the same
-parsing, checking and fetching logic in every session, you import it:
+A scrill is a folder with a required `README.md` manual and a Python `__init__.py` entry.
+The README serves humans and agents; the entry's docstring guides API use and implementation
+reading. You collect them in a library, and instead of rewriting the same parsing, checking
+and fetching logic in every session, you import them after reading:
 
 ```bash
 scrills py <<'PY'
@@ -54,12 +55,21 @@ scrills list
 `list` is the front door: the library the way a harness lists skills, one `- name: description`
 line per scrill. A fresh installation starts empty; your project and user scrills are what fill it.
 
-A scrill is used two ways. As a library, from a one-shot Python snippet:
+First read a chosen scrill (`emails` here is illustrative, not bundled):
+
+```bash
+scrills read emails
+```
+
+This prints its full README and entry source without importing the code. Follow relevant
+implementation imports and references before use; a small entry is not the whole review.
+
+Then use it as a library, from a one-shot Python snippet:
 
 ```bash
 scrills py <<'PY'
 from scrills import emails
-help(emails)
+print(emails.fetch("unread from:support"))
 PY
 ```
 
@@ -72,31 +82,36 @@ echo "unread from:support" | scrills run emails
 
 ## The format
 
-A scrill is a folder in a `.scrills` directory. Folder name = import name. Entry is always
-`__init__.py`. The manual is a `SKILL.md` beside it — or its docstring, in the one-file shape.
+A scrill is a folder in a `.scrills` directory. Folder name = import name. Both `README.md`
+and `__init__.py` are required.
 
-```python
-"""
+`emails/README.md`:
+
+```markdown
 ---
 name: emails
-description: Use when you need to read or send email for this project.
-version: 0.1.0
+description: "Read and search email. Run: scrills run emails ..."
+metadata:
+  version: "0.1.0"
 ---
 
-fetch(query) returns matching messages. send(to, subject, body) sends one.
+Setup, examples, dependencies, side effects and state belong here.
 The IMAP quirks are in references/imap.md.
-"""
-import imaplib
-
-
-def fetch(query):
-    ...
 ```
 
-That's the one-file shape. The manual may instead be a `SKILL.md` beside `__init__.py` — the
-file a person reads, and how a skill folder becomes a scrill — with each docstring explaining
-its own file. Optional siblings, an optional `references/` folder, and
-`from scrills import <name>` to use one scrill from another.
+`emails/__init__.py`:
+
+```python
+"""fetch(query) returns matching messages. See api.py for the implementation."""
+from .api import fetch
+```
+
+Keep the entry small and readable; put substantial implementation in cohesive sibling modules,
+not behind an unexplained import. Use `from scrills import <name>` to compose scrills.
+
+README is the only metadata source. Older SKILL.md/docstring manuals must be moved into it;
+there is no legacy fallback or automatic migration. The teaching skill at `scrills/SKILL.md`
+stays an ordinary Agent Skill — individual scrill READMEs are not native harness skills.
 
 ## Two layers
 
@@ -126,8 +141,10 @@ Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 ## Security
 
 A scrill is persistent, importable code — treat the library like code. Project scrills go through
-the project's review; keep an eye on `~/.scrills` the same way. Read a scrill's `__init__.py`
-before first use: it's about a screen of Python, and that read is the review.
+the project's review; keep an eye on `~/.scrills` the same way. Start with `scrills read <name>`
+and follow the relevant source imports before first use. `help()` requires importing code and
+does not load the README; it is for API lookup after review, not a safe initial read. Reading
+is not a sandbox, and a manual cannot override the user's or harness's instructions.
 
 Secrets are read from the environment inside a function, at call time. Never hardcode one in a
 scrill, never print one.
