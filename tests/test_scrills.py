@@ -1,5 +1,5 @@
 # Drives the real CLI as a subprocess: a session-scoped user home (one venv build), a fresh
-# project directory per test. Run: uv run --with pytest==8.4.2 python -m pytest tests/ -q
+# project directory per test. Run: uv run --python 3.13 --with pytest==8.4.2 python -m pytest tests/ -q
 import ast
 import datetime
 import fcntl
@@ -301,7 +301,6 @@ def test_run_reexported_main(home, project):
     assert "- facade: facade" in listing.stdout
 
 
-@pytest.mark.skipif(sys.version_info < (3, 10), reason="match syntax needs Python 3.10+")
 def test_run_new_syntax_scrill(home, project):
     write_scrill(
         project / ".scrills",
@@ -822,7 +821,7 @@ def test_invalid_venv_lock_has_the_writable_library_remedy(tmp_path):
 def test_site_packages_picked_by_pyvenv_cfg(tmp_path):
     fresh = tmp_path / "cfghome"
     venv = fresh / ".venv"
-    for version in ("3.9", "3.13"):
+    for version in ("3.13", "3.14"):
         (venv / "lib" / f"python{version}" / "site-packages").mkdir(parents=True)
     (venv / "pyvenv.cfg").write_text("home = /usr/local/bin\nversion = 3.13.7\n")
     result = scrills(["where"], fresh, tmp_path)
@@ -1572,12 +1571,15 @@ def test_scrills_cli_exported_to_runs(home, project):
         """
         import os
         import re
+        import shutil
         import subprocess
+        import sys
 
         def main():
             cli = os.environ["SCRILLS_CLI"]
             print(cli)
-            bare = {**os.environ, "PATH": "/usr/bin:/bin"}
+            bare = {**os.environ, "PATH": os.path.dirname(sys.executable)}
+            assert shutil.which("scrills", path=bare["PATH"]) is None
             probe = subprocess.run([cli, "--version"], capture_output=True, text=True, env=bare)
             print(probe.stdout.strip())
             if not re.fullmatch(r"\\d+\\.\\d+\\.\\d+", probe.stdout.strip()):
@@ -2019,64 +2021,67 @@ def test_cli_under_venv_python_returns(home, project):
     assert result.stdout.strip()
 
 
-def _old_python():
-    path = "/usr/bin/python3"
-    if not os.path.exists(path):
-        return None
-    probe = subprocess.run(
-        [path, "-c", "import sys; print(1 if sys.version_info < (3, 10) else 0)"],
-        capture_output=True,
-        text=True,
+@pytest.mark.parametrize("verb", ["--version", "history", "py"])
+def test_unsupported_python_is_refused_before_dispatch(tmp_path, monkeypatch, capsys, verb):
+    module = load_cli_module()
+    fresh = tmp_path / "home"
+    monkeypatch.setenv("SCRILLS_HOME", str(fresh))
+    monkeypatch.setattr(module.sys, "version_info", (3, 12, 9))
+    monkeypatch.setattr(module.sys, "argv", [CLI, verb])
+    monkeypatch.setattr(module, "relaunch", lambda: pytest.fail("unsupported launchers must not relaunch"))
+    with pytest.raises(SystemExit) as stopped:
+        module.main()
+    assert stopped.value.code == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "scrills requires Python 3.13 or newer" in output.err
+    assert "3.12.9" in output.err
+    assert str(fresh / ".venv") in output.err
+    assert not fresh.exists()
+
+
+def test_existing_unsupported_venv_is_refused_without_rebuilding(tmp_path):
+    fresh = tmp_path / "home"
+    interpreter = fresh / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    wrapper = (
+        f"#!{sys.executable}\n"
+        "import runpy, sys\n"
+        "sys.argv = sys.argv[2:]\n"
+        "sys.version_info = (3, 12, 9)\n"
+        "runpy.run_path(sys.argv[0], run_name='__main__')\n"
     )
-    return path if probe.stdout.strip() == "1" else None
-
-
-@pytest.mark.skipif(_old_python() is None, reason="no pre-3.10 system python to launch with")
-def test_old_launcher_relaunches_onto_venv(home, project):
-    old = _old_python()
-    assert old is not None
-    venv = str(Path(home) / ".venv" / "bin" / "python")
-
-    def major_minor(python):
-        result = subprocess.run(
-            [python, "-c", "import sys; print('.'.join(map(str, sys.version_info[:2])))"],
-            capture_output=True,
-            text=True,
-        )
-        return tuple(int(part) for part in result.stdout.strip().split("."))
-
-    if major_minor(venv) <= major_minor(old):
-        pytest.skip("the venv interpreter is not newer than the launcher")
-    write_scrill(
-        project / ".scrills",
-        "modern",
-        "modern",
-        """
-        def main():
-            match "x":
-                case "x":
-                    print("relaunched")
-            return 0
-        """,
-    )
-    env = {**base_env(), "SCRILLS_HOME": str(home)}
+    interpreter.write_text(wrapper)
+    interpreter.chmod(0o755)
+    (fresh / ".venv" / ".scrills-ready").write_text("1\n")
     result = subprocess.run(
-        [old, CLI, "run", "modern"],
-        env=env,
-        cwd=str(project),
+        [sys.executable, CLI, "--version"],
+        env={**base_env(), "SCRILLS_HOME": str(fresh)},
+        cwd=str(tmp_path),
         capture_output=True,
         text=True,
+        timeout=10,
     )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "relaunched\n"
-    listing = subprocess.run(
-        [old, CLI, "list"],
-        env=env,
-        cwd=str(project),
-        capture_output=True,
-        text=True,
-    )
-    assert "- modern: modern" in listing.stdout
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "scrills requires Python 3.13 or newer" in result.stderr
+    assert "3.12.9" in result.stderr
+    assert str(fresh / ".venv") in result.stderr
+    assert interpreter.read_text() == wrapper
+    assert not (fresh / ".runs").exists()
+    assert not (fresh / ".results").exists()
+
+
+@pytest.mark.parametrize("version", [(3, 13, 0), (3, 14, 0)])
+def test_supported_python_versions_are_accepted(monkeypatch, capsys, version):
+    module = load_cli_module()
+    monkeypatch.setattr(module.sys, "version_info", version)
+    monkeypatch.setattr(module.sys, "argv", [CLI, "--version"])
+    monkeypatch.setattr(module, "relaunch", lambda: None)
+    module.main()
+    output = capsys.readouterr()
+    assert output.out.strip() == module.version()
+    assert output.err == ""
 
 
 def test_registry_failure_is_harmless(home, project):
@@ -2320,6 +2325,32 @@ def test_indented_docstrings_never_supply_metadata(home, project):
     used = scrills(["py"], home, project, stdin="from scrills import innerdoc\ninnerdoc.VALUE")
     assert used.returncode == 0
     assert log_records(home, "py")[-1]["imported"] == {"innerdoc": "4.4.4"}
+
+
+def test_install_sh_requires_python_313_before_writing(tmp_path):
+    repo = Path(CLI).resolve().parent.parent.parent
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text("#!/bin/sh\nprintf '3.12.9\\n'\nexit 1\n")
+    fake_python.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    result = subprocess.run(
+        ["/bin/sh", "install.sh", "--no-skill"],
+        cwd=str(repo),
+        env={
+            **base_env(),
+            "HOME": str(tmp_path / "fakehome"),
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "SCRILLS_BIN": str(bin_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "python3 3.13 or newer is required" in result.stderr
+    assert "3.12.9" in result.stderr
+    assert not bin_dir.exists()
 
 
 def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
@@ -2570,13 +2601,10 @@ def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
     assert str(notadir) in result.stderr
 
 
-def test_boot_and_resolver_are_real_parseable_files():
-    # the boot and the resolver source live as real files beside the CLI: they must compile,
-    # under the 3.9 grammar too (a stock launcher may be old, and the venv may have been built by one)
-    for name in ("_boot.py", "_scrills_pth.py", "_manifest.py", "_history.py"):
+def test_runtime_files_parse_under_minimum_python():
+    for name in ("scrills", "_boot.py", "_scrills_pth.py", "_manifest.py", "_history.py"):
         source = (Path(CLI).parent / name).read_text()
-        ast.parse(source, filename=name)
-        ast.parse(source, filename=name, feature_version=(3, 9))
+        ast.parse(source, filename=name, feature_version=(3, 13))
 
 
 def test_docs_include_offsets():

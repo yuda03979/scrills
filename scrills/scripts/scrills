@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# scrills: skills you import instead of read. Stdlib only, driven from bash in any harness.
+# scrills: skills you import instead of read. Python 3.13+, stdlib only, driven from bash in any harness.
 #
 # A scrill is a folder in a .scrills directory: <name>/__init__.py and a required README.md.
 # README is the human/agent manual and the only metadata source; entry docstrings explain
@@ -55,7 +55,7 @@
 # ends. Metadata only - verb, name, a W3C-shaped run id (a valid TRACEPARENT in the environment
 # is joined, and the boot sets TRACEPARENT for everything the run starts, so chained runs share
 # one trace; SCRILLS_CLI is set to this file's own path, so a run can spawn nested scrills
-# children without relying on PATH - cron and launchd often have none), pid, cwd, who, timing,
+# children without finding the command on PATH - python3 must still be on PATH), pid, cwd, who, timing,
 # exit (wrapped to 0..255 like the OS wraps it, so the record always equals what the caller
 # observed), the scrills the run imported with their versions,
 # and on an uncaught exception its type and where it broke (for a compile error, where the
@@ -1139,6 +1139,13 @@ def relaunch():
 
 
 def main():
+    if sys.version_info < (3, 13):
+        fail(
+            f"scrills requires Python 3.13 or newer; {sys.executable} is {'.'.join(map(str, sys.version_info[:3]))}.\n"
+            "Use Python 3.13+ as python3 on PATH, including scheduled jobs.\n"
+            f"If the shared environment uses an older Python, remove only {os.path.join(user_home(), '.venv')} "
+            "and rerun; reinstall packages with scrills install."
+        )
     if sys.argv[1:2] != ["history"]:
         relaunch()
     argv = sys.argv[1:]

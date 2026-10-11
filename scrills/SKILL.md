@@ -1,10 +1,10 @@
 ---
 name: scrills
 description: Python capability library you call from bash - a scrill is script + skill. Do not use scrills until you have read this skill. Before any other tool or new script, run `scrills list` - a scrill may already cover the task. Read chosen scrills with `scrills read <name>` before use. Use the library for computation beyond a one-liner and finished work with clear inputs; save reusable logic as a scrill.
-compatibility: Needs bash and python3 (3.9 or newer) on macOS or Linux (Debian/Ubuntu also need the python3-venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
+compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.2"
+  version: "0.3.3"
 ---
 
 # scrills
@@ -175,7 +175,7 @@ A scrill run is an ordinary process: the command *is* the run — no wrapper, da
 
 A program scrill slots straight into cron or launchd — one-shot checks, scheduled work. Work that must outlive the session needs exactly that: a timer inside a session dies with the session, and a session-scoped scheduler goes with it.
 
-Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than through PATH, which cron and launchd may not carry. A scheduled job's cwd decides its project layer: cron starts in `$HOME`, launchd in `/`, so a job that needs project scrills must `cd` in first — otherwise only the user layer resolves and the import fails plainly, not through the lost-project notice, which needs inherited layers a scheduler doesn't have. On macOS, scheduled jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — keep the scrills clone outside them; the piped installer's default (`~/.local/share/scrills`) already is.
+Every run gets `SCRILLS_CLI` in its environment — the command's own absolute path; spawn nested `scrills` children through it rather than searching PATH for the command. The child's PATH must still provide Python 3.13+ as `python3`, including under cron/launchd. A scheduled job's cwd decides its project layer: cron starts in `$HOME`, launchd in `/`, so a job that needs project scrills must `cd` in first — otherwise only the user layer resolves and the import fails plainly, not through the lost-project notice, which needs inherited layers a scheduler doesn't have. On macOS, scheduled jobs can't read TCC-protected folders (`~/Desktop`, `~/Documents`, `~/Downloads`), even through symlinks — keep the scrills clone outside them; the piped installer's default (`~/.local/share/scrills`) already is.
 
 ## Bare python
 
@@ -194,6 +194,8 @@ scrills install httpx
 ```
 
 pip behind it, arguments pass through (`-U`, `==` pins, `-r`); `scrills where` shows the raw command it stands for. Nothing is installed unless asked.
+
+Both the launching `python3` on PATH and the shared environment must be Python 3.13+; this includes cron/launchd. There is no old-Python bootstrap. If an existing environment is older, remove only `~/.scrills/.venv` (or `$SCRILLS_HOME/.venv`), rerun under 3.13+, and reinstall its packages. Your scrills, state and saved responses stay untouched; scrills does not rebuild automatically.
 
 ## Secrets
 

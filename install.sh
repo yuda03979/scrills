@@ -30,6 +30,11 @@ for arg in "$@"; do
     esac
 done
 
+if ! python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3]))); sys.exit(sys.version_info < (3, 13))' 2>/dev/null); then
+    echo "install.sh: python3 3.13 or newer is required on PATH (found: ${python_version:-missing or unusable})" >&2
+    exit 1
+fi
+
 here=
 if [ -f "$0" ]; then
     here=$(cd "$(dirname "$0")" && pwd)

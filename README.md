@@ -19,8 +19,10 @@ already know.
 
 ## Install
 
-You need bash, python3 (3.9 or newer), macOS or Linux. Nothing else.
-(Debian/Ubuntu: `sudo apt install python3-venv` once.)
+You need bash, python3 (3.13 or newer), macOS or Linux. Nothing else.
+On Debian/Ubuntu, also install the matching venv package (e.g. `python3.13-venv`).
+`python3` on PATH must meet that minimum, including under cron/launchd; scrills does not
+install Python or fall back to an older interpreter.
 
 ```bash
 git clone https://github.com/yuda03979/scrills.git
@@ -45,6 +47,10 @@ ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
 ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
+
+Upgrading an existing environment built with older Python? Remove only `~/.scrills/.venv`
+(or `$SCRILLS_HOME/.venv`), rerun with Python 3.13+, then reinstall its packages with
+`scrills install`. Your scrills, state and saved responses stay untouched.
 
 ## A taste
 

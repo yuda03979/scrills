@@ -15,7 +15,7 @@ No server, no daemon, no config files, no build step. One command, plain folders
 
 ## Install
 
-You need: bash, python3 (3.9 or newer), macOS or Linux. Nothing else. (Debian/Ubuntu: `sudo apt install python3-venv` once — Debian ships python3 without the venv module.)
+You need: bash, python3 (3.13 or newer), macOS or Linux. Nothing else. On Debian/Ubuntu, also install the matching venv package (e.g. `python3.13-venv`). The `python3` on PATH must meet the minimum, including under cron/launchd; scrills neither installs Python nor supports an older launcher.
 
 ```bash
 git clone https://github.com/yuda03979/scrills.git
@@ -40,7 +40,9 @@ ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   
 
 (`~/.local/bin` should be on your PATH; any directory on it works — `SCRILLS_BIN=/elsewhere ./install.sh`. Symlink, don't copy the file out: the command reads its version and manual from the `scrills/` folder next to it, and the symlink makes `git pull` your upgrade path.)
 
-That's the whole install. The first `py` or `run` creates a shared environment at `~/.scrills/.venv` — a few seconds, once.
+That's the whole install. The first `py` or `run` creates a shared environment at `~/.scrills/.venv` using the launching Python — a few seconds, once.
+
+If an existing shared environment uses Python older than 3.13, remove only `~/.scrills/.venv` (or `$SCRILLS_HOME/.venv`), rerun with Python 3.13+, and reinstall its packages with `scrills install`. Scrills never rebuilds it automatically; your library, state and saved responses remain untouched.
 
 ## Kick the tires
 

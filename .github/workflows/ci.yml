@@ -10,14 +10,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.9", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
-      - name: tests on Python ${{ matrix.python }}
+          python-version: "3.13"
+      - name: tests on Python 3.13
         run: |
           python --version
           python -m pip install pytest==8.4.2
@@ -31,8 +30,6 @@ jobs:
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@v3
-      - name: 3.9 grammar
-        run: python -c "import ast, pathlib; [ast.parse(p.read_text(), feature_version=(3,9)) for p in [pathlib.Path('scrills/scripts/scrills'), *pathlib.Path('scrills/scripts').glob('*.py')]]"
       - name: docs
         run: uvx --with-requirements docs/requirements.txt mkdocs build --strict
 

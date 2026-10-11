@@ -28,11 +28,11 @@ listing, static reading and registry versions must never interpret README differ
 
 ## Rules that are not negotiable
 
-- **One folder, standard library only.** Everything under `scrills/scripts/` imports nothing
-  outside the stdlib and must stay parseable by **Python 3.9** — a stock launcher (cron, an old
-  `/usr/bin/python3`) reads the CLI before anything relaunches onto the venv, and the venv itself
-  may have been built by one. Check with
-  `python3 -c "import ast, pathlib; [ast.parse(p.read_text(), feature_version=(3,9)) for p in [pathlib.Path('scrills/scripts/scrills'), *pathlib.Path('scrills/scripts').glob('*.py')]]"`.
+- **One folder, standard library only, Python 3.13+.** Everything under `scrills/scripts/`
+  imports nothing outside the stdlib. Both the launcher and shared venv must meet the minimum;
+  no older-interpreter compatibility layer or automatic Python installation. CI runs Python
+  3.13 on macOS and Linux, and the suite guards that grammar. Newer Python syntax/APIs within
+  this floor are welcome; do not preserve older-Python workarounds.
 - **README and docstrings are product surface, with distinct roles.** Every scrill requires
   `README.md` and `__init__.py`. README is the human/agent manual and sole metadata source;
   entry/module/function docstrings guide API use and implementation reading. No SKILL.md or
@@ -82,10 +82,10 @@ The two-root-file scrill layout remains authoring guidance, not enforcement.
 ## Tests
 
 ```bash
-uv run --with pytest==8.4.2 python -m pytest tests/ -q
+uv run --python 3.13 --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **262 passed** on Python 3.13; Python 3.9 reports **260 passed, 2 skipped**. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **268 passed** on Python 3.13. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 
