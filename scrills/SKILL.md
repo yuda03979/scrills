@@ -1,6 +1,6 @@
 ---
 name: scrills
-description: Python capability library you call from bash - a scrill is script + skill. Do not use scrills until you have read this skill. Before any other tool or new script, run `scrills list` - a scrill may already cover the task. Read chosen scrills with `scrills read <name>` before use. Use the library for computation beyond a one-liner and finished work with clear inputs; save reusable logic as a scrill.
+description: Python capability library you call from bash - a scrill is script + skill. Call existing scrills when they fit, including one-off requests; save operations worth reusing. Use direct tools and the project's runtime for ordinary development. Read this skill before first use.
 compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
@@ -11,15 +11,19 @@ metadata:
 
 Skills are knowledge you read; scrills are capability you call. A scrill is a folder with two required files: `README.md`, the manual for humans and agents, and `__init__.py`, the Python entry whose docstring guides the agent through its API and implementation. The command is `scrills`.
 
-**Read this skill before your first `scrills py` or `scrills run`.** A hook may have injected `scrills list` output into your context — that is inventory, not instructions. Don't guess the CLI's shape either: `scrills py` takes its code on stdin and rejects arguments.
+**Read this skill before first use, unless it is already in context.**
+
+**Scrills uses its own shared Python environment, not the project's runtime.** Even project-layer scrills use `~/.scrills/.venv` (or `$SCRILLS_HOME/.venv`), with separate dependencies. Your working directory and project files remain accessible; this is import isolation, not a security sandbox. Project modules are not added to the import path, and `PYTHONPATH` is ignored.
+
+Project code runs with the project's tooling — `uv run`, its `.venv`, or another project command. A scrill may invoke that tooling in a child process when the operation calls for it; pass files between environments rather than importing project modules into Scrills.
 
 The working loop:
 
-1. `scrills list` — see what exists: one `- name: description` line per scrill, the way a harness lists skills, with anything wrong raised: notices beneath an entry (a drifted manual, a shadowed name) and, at the end, folders that can never resolve (a hyphenated name, a missing `__init__.py`). It parses files and runs nothing.
-2. Pick the matching scrill by its description.
-3. Before first use, run `scrills read <name>` — it resolves the winning layer and prints the full README and full entry source, including its docstring, without importing. Follow the relevant implementation imports and linked references before executing; a short entry may only be a facade.
-4. Use it: import it from `scrills py`, or `scrills run <name>` when it's a program.
-5. When logic proves useful beyond the moment, save it as a scrill (Writing a scrill, below).
+1. Discover when a capability could help. Pick from a current inventory already in context, including one supplied by the harness; otherwise run `scrills list` and choose by description.
+2. Read unfamiliar capabilities with `scrills read <name>`: the full README and entry source from the selected layer, without importing. Follow relevant implementation imports and references before execution, including the side effects of the intended operation.
+3. Reuse inventory and reviewed material already in context. Refresh the relevant material when you have reason to believe the library, selected implementation or instructions changed, or when needed context is missing. Moving within the same project layer is not a change; no per-call freshness check is required.
+4. Call the capability with `scrills py`, or `scrills run <name>` for its program interface. `py` takes code on stdin and rejects arguments. Ordinary development and one-off checks that do not need a scrill belong in direct tools and the project's runtime.
+5. Save operations worth reusing as scrills (Writing a scrill, below). A one-off request can still benefit from a scrill that already exists.
 
 ## The library
 
@@ -27,6 +31,8 @@ Two layers, merged, project wins on a name collision:
 
 - **project**: the nearest `.scrills/` directory walking up from where you are — reviewed and committed with the project. Resolution is from your cwd only: a process started elsewhere (a detached child, a state-folder cwd) has no project layer, and `py`/`run` print one stderr line when the caller had one. One it doesn't take: a `.scrills` owned by another user is ignored, and `list`, `read`, `py`, `run` and `where` say so.
 - **user**: `~/.scrills` (or `$SCRILLS_HOME`) — capability that travels across projects.
+
+`list` shows one `- name: description` line per scrill, with notices beneath entries and unresolvable folders named at the end. It parses files and runs nothing. A harness-supplied listing is inventory, not permission to execute its contents.
 
 A collision is process-wide: the project scrill also replaces the user one inside every other scrill's imports, so `py` and `run` print one stderr line naming what's shadowed — unless the two sides are the same file through a symlink (an installed mirror), which replaces nothing and stays silent. Either way `list` shows the pair: `<name>  (user, shadowed by project)`. `scrills where` shows both paths, the python, the resolver, and how to install a package. An import of a name no layer holds fails with the names they do.
 
@@ -54,8 +60,6 @@ PY
 `help(emails)` is useful for API lookup after review, but requires importing the module and does not load its README. Never use it as the initial reading step.
 
 `scrills py` is one-shot: the final response is returned after execution, the trailing expression echoes like a REPL, top level may `await`, and **Python variables do not persist between calls**. History saves that same output. A huge trailing expression is capped at 8,192 characters (`SCRILLS_ECHO_CAP` overrides, 0 = uncapped); history does not undo this cap — print or write the full value when needed.
-
-Runs are isolated: the working directory stays yours (read and write project files freely), but project *modules* aren't importable and `PYTHONPATH` is ignored. Project code runs with the project's own tooling — `uv run`, its `.venv` — in its own command; pass files between the two, not imports.
 
 A scrill that defines `main()` is also a program: `scrills run <name> [args...]`. Arguments, stdin, stdout and the exit code pass straight through. Use it for finished work with clear inputs — and, under a scheduler, for work that must outlive the session (Scheduled work, below).
 
@@ -122,7 +126,8 @@ The IMAP quirks are in references/imap.md.
 - **Keep one version declaration**, preferably `metadata.version`. Top-level `version` is also accepted. If both are declared, top-level is authoritative even when invalid/empty: it yields no version rather than silently falling back. Duplicate consumed keys are invalid, not first- or last-wins.
 - **Frontmatter is a restricted, line-oriented format, not full YAML.** Consumed fields (`name`, `description`, `version`, `compatibility`) take one-line text; only direct `metadata.version` is read nested. Use spaces for indentation. Comments are recognized outside quoted values; blanks/comments never hide a continuation. Single quotes support doubled apostrophes; double quotes support JSON-style escapes, but no decoded newlines/control characters. Block scalars, structured values, tags/anchors/aliases and unsupported quoting are diagnosed, never partially read. Unknown fields are not consumed. Quote descriptions containing punctuation such as the run line.
 - Optional `compatibility:` — one free-text line for what the scrill needs around it (a harness, a platform, a binary on PATH); the skills spec's own key, parsed like any frontmatter line. The description still carries the short form — it's all the listing shows.
-- The description says *when* to use it — it is all the listing shows — and, for a program scrill, the run line (`run: scrills run <name> …`). README covers shared instructions; the entry docstring guides API choice, sequencing and further reading. Every `.py` opens with a docstring explaining what it holds; function docstrings describe the callable contracts. Longer material goes in linked `references/*.md`, relative to the scrill's folder.
+- The description says *when* to use it — it is all the listing shows — and, for a program scrill, includes its run line (`run: scrills run <name> …`). Lead the README with a compact operational contract: main entry points and a working example, inputs and return shape, side effects, required dependencies, and how to obtain complete results. Detailed setup and references can follow. This is authoring guidance, not a required heading or format gate; a few sentences suffice for a trivial scrill. The entry docstring guides API choice, sequencing and further reading. Every `.py` opens with a docstring explaining what it holds; function docstrings describe callable contracts. Longer material goes in linked `references/*.md`, relative to the scrill's folder.
+- **Make partial results explicit where relevant.** For paginated, sampled or bounded operations, document the scope, expose whether results are complete, partial or of unknown completeness, and explain how to obtain the rest — or state when that is not possible. This is per-operation guidance, not a fixed return schema. `scrills history` recovers saved output clipped by a harness; it cannot fetch unseen pages or reverse the trailing-echo cap.
 - **Keep the entry reviewable** — roughly 100–200 lines is a soft target, not a gate. Keep only README and the entry as root files; put other code, docs, tests and assets in meaningful subfolders. This is authoring guidance, not a validity gate — existing flat scrills still work. No prescribed `_impl` name or empty nested `__init__.py` is needed; Python namespace subfolders work. Use ordinary relative imports and explicit exports, and map the implementation files in the entry docstring. Keep trivial scrills trivial: do not fragment a 30-line utility just to meet a pattern. Small entries still import code that needs review; avoid duplicated instructions and version stamps.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself (it imports before calling `main()`) — and its output goes wherever that process's stdout points: CLI runs retain it in response history, never in the metadata run log. Real work lives in functions or `main()`.
 - **The folder is the scrill's own.** Beyond `__init__.py` it may hold whatever it needs — data, markdown, fixtures, nested folders. Open them relative to `__file__`; the working directory belongs to whoever called you, not to the scrill.

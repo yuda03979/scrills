@@ -17,6 +17,11 @@ PY
 No server, no daemon, no config files, no build step. One command, plain folders, and Python you
 already know.
 
+Use an existing scrill when it fits, even for a one-off request; create one when an
+operation is worth retaining. Ordinary development uses direct tools and the
+project's runtime. Scrills has its own shared Python environment and dependencies,
+but can still access your working directory and files — it is not a security sandbox.
+
 ## Install
 
 You need bash, python3 (3.13 or newer), macOS or Linux. Nothing else.
@@ -58,8 +63,10 @@ Upgrading an existing environment built with older Python? Remove only `~/.scril
 scrills list
 ```
 
-`list` is the front door: the library the way a harness lists skills, one `- name: description`
-line per scrill. A fresh installation starts empty; your project and user scrills are what fill it.
+`list` shows the library as one `- name: description` line per scrill. Reuse a current
+inventory already in context, including one supplied by the harness. Refresh when
+the selected project/user libraries change, not for each directory change within
+the same project layer. A fresh installation starts empty; your scrills fill it.
 
 First read a chosen scrill (`emails` here is illustrative, not bundled):
 
@@ -67,8 +74,10 @@ First read a chosen scrill (`emails` here is illustrative, not bundled):
 scrills read emails
 ```
 
-This prints its full README and entry source without importing the code. Follow relevant
-implementation imports and references before use; a small entry is not the whole review.
+This prints the full README and entry source without importing the code. Follow
+relevant implementation imports and references before unfamiliar execution;
+a small entry is not the whole review. Reuse reviewed material still in context,
+and refresh it when relevant implementation or instructions have changed.
 
 Then use it as a library, from a one-shot Python snippet:
 
@@ -134,6 +143,10 @@ Keep the entry small and readable. Prefer only README and `__init__.py` at the r
 code, docs, tests and assets in meaningful subfolders, with an explicit reading map in the entry.
 This is guidance, not a format gate: existing flat scrills work, and neither `_impl` nor empty
 nested `__init__.py` files are required. Use `from scrills import <name>` to compose scrills.
+
+Lead the README with the calls, inputs/outputs, side effects and dependencies a
+caller needs, including completeness and retrieval where relevant. The slug
+walkthrough in Getting started demonstrates a compact contract without a fixed schema.
 
 README is the only metadata source. Older SKILL.md/docstring manuals must be moved into it;
 there is no legacy fallback or automatic migration. The teaching skill at `scrills/SKILL.md`

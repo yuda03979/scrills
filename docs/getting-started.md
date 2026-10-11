@@ -13,6 +13,13 @@ PY
 
 No server, no daemon, no config files, no build step. One command, plain folders, and Python you already know.
 
+Use an existing scrill when it fits, even for a one-off request. For ordinary
+development, use direct tools and the project's runtime. Scrills uses its own shared
+Python environment, even for project-layer scrills; it does not use the project's
+dependencies or import its modules. Your working directory and files remain
+accessible — this is not a security sandbox. A scrill may run project tooling in a
+child process when useful; keep the Python environments separate.
+
 ## Install
 
 You need: bash, python3 (3.13 or newer), macOS or Linux. Nothing else. On Debian/Ubuntu, also install the matching venv package (e.g. `python3.13-venv`). The `python3` on PATH must meet the minimum, including under cron/launchd; scrills neither installs Python nor supports an older launcher.
@@ -50,9 +57,11 @@ If an existing shared environment uses Python older than 3.13, remove only `~/.s
 scrills list
 ```
 
-`list` is the front door — the library the way a harness lists skills, one `- name: description` line per scrill. A fresh installation reports that there are no scrills yet; the next section adds the first one. Before using an existing scrill, `scrills read <name>` prints the full README and entry source from the winning layer without importing it. Follow relevant implementation imports and references before executing; a short facade is not a complete review.
+`list` shows the library as one `- name: description` line per scrill. Use a current inventory already supplied by your harness or obtained earlier; there is no need to list it again. Refresh when the selected library changes, not for each move within the same project layer. A fresh installation reports that there are no scrills yet; the next section adds the first one.
 
-`scrills py` behaves like a disposable REPL: the final response is returned after execution, the trailing expression echoes (capped at 8,192 characters; `SCRILLS_ECHO_CAP=0` uncaps it), top level may `await`, and Python variables do not persist between calls. History saves that same output, not an uncapped alternative. It runs isolated: your working directory and its files are fully available, but the project's own *modules* aren't importable — run project code with the project's tooling (`uv run`, its `.venv`) and pass files between the two.
+Before using an unfamiliar scrill, `scrills read <name>` prints its full README and entry source without importing it. Follow relevant implementation imports and references before execution, including the intended side effects. Reuse reviewed material already in context; read what is needed when relevant code/instructions change or that context is missing.
+
+`scrills py` behaves like a disposable REPL for scrill calls and composition: the final response is returned after execution, the trailing expression echoes (capped at 8,192 characters; `SCRILLS_ECHO_CAP=0` uncaps it), top level may `await`, and Python variables do not persist between calls. History saves that same output, not an uncapped alternative.
 
 ## Write your first scrill
 
@@ -72,9 +81,11 @@ metadata:
   version: "0.1.0"
 ---
 
-slugify(text) returns a lowercase ASCII slug; other characters become separators.
-As a program: echo "My Title" | scrills run slug
-No dependencies, network calls, file writes or persistent state.
+`slugify(text)` accepts a string and returns a lowercase ASCII slug; other characters become separators.
+Example: `slugify("Hello, World! — Part 2")` returns `"hello-world-part-2"`.
+As a program: `echo "My Title" | scrills run slug` prints `my-title`.
+No third-party dependencies, network calls, file writes or persistent state.
+The function returns the complete slug; there is no pagination.
 ```
 
 `~/.scrills/slug/__init__.py`:
@@ -115,7 +126,7 @@ echo "Hello, World" | scrills run slug
 
 The anatomy, in order of importance:
 
-- **README is the manual and the only metadata source.** Its Skills-style header declares `name`, `description` and one version (prefer `metadata.version`; top-level `version` is also accepted). The header reader is a restricted one-line text format, not full YAML; unsupported values and duplicate keys are diagnosed. The description says *when* and includes the program's run line. The README explains setup, examples, side effects and state; entry and function docstrings guide API use and deeper source reading. `list` and `read` never import the target.
+- **README is the manual and the only metadata source.** Its Skills-style header declares `name`, `description` and one version (prefer `metadata.version`; top-level `version` is also accepted). The header reader is a restricted one-line text format, not full YAML; unsupported values and duplicate keys are diagnosed. The description says *when* and includes the program's run line. Lead the body with the caller's contract — entry points and example, inputs/return shape, side effects, dependencies, and completeness/retrieval where relevant — as the short slug manual above does. Detailed setup and references can follow; entry and function docstrings guide API use and deeper source reading. `list` and `read` never import the target.
 - **Keep the entry reviewable.** Roughly 100–200 lines is a soft target, not a gate. Prefer only README and `__init__.py` as root files; move other code, docs, tests and assets into meaningful subfolders, with a reading map in the entry docstring. Keep a trivial utility like slug in one Python file; do not fragment it unnecessarily.
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself — and its output goes wherever that process points. Real work lives in functions or `main()`.
 - Implementation can live in `lib/api.py`, imported as `from .lib.api import x`; longer material belongs in `references/`. Folder names are your choice. A nested `__init__.py` is optional unless that subpackage needs its own exports/documentation; namespace subfolders work. These are conventions, not a format gate — existing flat scrills remain valid.
@@ -213,7 +224,7 @@ Scrills are built for coding agents: the library is how capability survives the 
 
 Scrills does not modify harness settings, permissions, hooks, models, or extensions. Those remain under the control of the user and harness. Run Pi's `/reload` after changing skill resources in an existing session.
 
-A taught agent checks `scrills list` before writing logic, reads the chosen scrill with `scrills read`, follows relevant imports, uses what exists, and saves what proves useful — so the second session starts where the first one ended.
+A taught agent uses existing scrills when they fit, follows the discovery and reading workflow above, and saves operations worth reusing. Ordinary development stays in direct tools and the project runtime; using a capability does not require rebuilding it or reviewing unchanged material again.
 
 ## The fine print
 
