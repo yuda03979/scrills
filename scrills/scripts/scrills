@@ -47,8 +47,8 @@
 # (callable(module.main)) under the interpreter that actually runs the scrill - so a scrill
 # without main() has its top level run (imports, constants, defs by convention) before the boot
 # refuses with exit 2. `install` hands everything after it to the venv's pip - the one
-# explicit write to the shared environment, never implicit. The version lives once, in SKILL.md's
-# frontmatter.
+# explicit write to the shared environment, never implicit. The version lives once, in the
+# repository's skills/scrills/SKILL.md frontmatter.
 #
 # Every py/run is registered by the runner, never by the scrill: a live card at
 # <home>/.runs/<pid>.json while it runs, one appended line in <home>/.runs/log.jsonl when it
@@ -108,7 +108,8 @@ import time
 
 SCRIPT = os.path.realpath(__file__)
 os.environ["SCRILLS_CLI"] = SCRIPT
-SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT)))
+SKILL_FILE = os.path.join(REPO_ROOT, "skills", "scrills", "SKILL.md")
 BOOT_FILE = os.path.join(os.path.dirname(SCRIPT), "_boot.py")
 PTH_SOURCE = os.path.join(os.path.dirname(SCRIPT), "_scrills_pth.py")
 MANIFEST_FILE = os.path.join(os.path.dirname(SCRIPT), "_manifest.py")
@@ -849,7 +850,7 @@ def boot_path():
 def version():
     text = read_text(SKILL_FILE)
     if text is None:
-        return "unknown (SKILL.md missing next to the script - reinstall keeping the scrills/ folder intact)"
+        return "unknown (skills/scrills/SKILL.md missing from the clone - reinstall from a complete clone)"
     inside = False
     under_metadata = False
     for line in text.splitlines():

@@ -3,8 +3,8 @@
 #
 # Two ways in, one script. Run it from a clone (./install.sh, or sh install.sh) and it installs
 # that clone. Pipe it from the internet and it clones first, into ~/.local/share/scrills, then
-# installs that. Either way the command is a symlink into the repo, so `git pull` is the upgrade
-# path and the CLI can still find SKILL.md beside it.
+# installs that. Either way the command is a symlink into the repo, so `git pull` updates the CLI
+# and it can find the skill at skills/scrills/SKILL.md in the same clone.
 #
 # Knobs, all optional: SCRILLS_BIN (default ~/.local/bin), SCRILLS_SRC (default
 # ~/.local/share/scrills, only used when cloning), SCRILLS_REPO (default the github url),
@@ -56,7 +56,7 @@ else
     root=$SRC
 fi
 
-for required in scrills/scripts/scrills scrills/scripts/_boot.py scrills/scripts/_scrills_pth.py scrills/scripts/_manifest.py scrills/scripts/_history.py scrills/SKILL.md; do
+for required in scrills/scripts/scrills scrills/scripts/_boot.py scrills/scripts/_scrills_pth.py scrills/scripts/_manifest.py scrills/scripts/_history.py skills/scrills/SKILL.md; do
     [ -f "$root/$required" ] || { echo "install.sh: missing required file $required under $root" >&2; exit 1; }
 done
 
@@ -70,9 +70,9 @@ link_skill() {
     if [ -e "$skills/scrills" ] && [ ! -L "$skills/scrills" ]; then
         echo "skipped  $skills/scrills exists and is not a symlink - left untouched"
     else
-        ln -sfn "$root/scrills" "$skills/scrills"
+        ln -sfn "$root/skills/scrills" "$skills/scrills"
         linked_skills="$linked_skills $skills/scrills"
-        echo "linked   $skills/scrills -> $root/scrills"
+        echo "linked   $skills/scrills -> $root/skills/scrills"
     fi
 }
 

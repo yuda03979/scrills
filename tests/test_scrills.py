@@ -22,7 +22,7 @@ import pytest
 from conftest import base_env
 
 CLI = str(Path(__file__).resolve().parent.parent / "scrills" / "scripts" / "scrills")
-SKILL = Path(__file__).resolve().parent.parent / "scrills" / "SKILL.md"
+SKILL = Path(__file__).resolve().parent.parent / "skills" / "scrills" / "SKILL.md"
 
 
 def scrills(args, home, cwd, stdin=None, extra_env=None):
@@ -105,7 +105,8 @@ def test_version(home, project):
     frontmatter = text[4 : text.index("\n---", 4)]
     top = {line.split(":", 1)[0] for line in frontmatter.splitlines() if line[:1].strip()}
     assert top <= SPEC_KEYS, sorted(top - SPEC_KEYS)
-    assert SKILL.parent.name == "scrills"
+    assert SKILL.parent.name == "scrills" and SKILL.parent.parent.name == "skills"
+    assert not (SKILL.parents[2] / "scrills" / "SKILL.md").exists()
     stated = next(
         line.split(":", 1)[1].strip().strip("\"'")
         for line in frontmatter[frontmatter.index("\nmetadata:") :].splitlines()
@@ -2374,12 +2375,12 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
 
 @pytest.mark.parametrize(
     "missing",
-    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "scrills/SKILL.md"],
+    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "skills/scrills/SKILL.md"],
 )
 def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
     repo = Path(CLI).resolve().parent.parent.parent
     clone = tmp_path / missing.replace("/", "-")
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "scrills/SKILL.md"):
+    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "skills/scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
@@ -2611,11 +2612,11 @@ def test_docs_include_offsets():
     # docs pages include repo files by line offset; the offset must skip exactly the intended
     # head block, or edits leak frontmatter/title text into the built site silently
     repo = Path(CLI).resolve().parent.parent.parent
-    skill_lines = (repo / "scrills" / "SKILL.md").read_text().splitlines()
+    skill_lines = (repo / "skills" / "scrills" / "SKILL.md").read_text().splitlines()
     closing = skill_lines.index("---", 1)
     assert skill_lines[0] == "---"
     expected = {
-        "docs/manual.md": ("scrills/SKILL.md", closing + 1),
+        "docs/manual.md": ("skills/scrills/SKILL.md", closing + 1),
         "docs/index.md": ("README.md", 2),
     }
     for doc, (target, skipped) in expected.items():

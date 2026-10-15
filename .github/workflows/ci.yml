@@ -54,9 +54,13 @@ jobs:
           import re
           import subprocess
 
-          path = "scrills/SKILL.md"
+          path = "skills/scrills/SKILL.md"
           base = os.environ["BASE_SHA"]
-          if subprocess.run(["git", "diff", "--quiet", base, "HEAD", "--", path]).returncode == 0:
+          old_path = path
+          if subprocess.run(["git", "cat-file", "-e", f"{base}:{path}"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+              old_path = "scrills/SKILL.md"
+          if subprocess.run(["git", "diff", "--quiet", base, "HEAD", "--", old_path, path]).returncode == 0:
               raise SystemExit(0)
 
           def metadata_version(text):
@@ -93,7 +97,7 @@ jobs:
                       raise SystemExit(f"{path}: metadata.version is not a valid quoted string") from None
               return str(value)
 
-          before = subprocess.check_output(["git", "show", f"{base}:{path}"], text=True)
+          before = subprocess.check_output(["git", "show", f"{base}:{old_path}"], text=True)
           after = subprocess.check_output(["git", "show", f"HEAD:{path}"], text=True)
           old = metadata_version(before)
           new = metadata_version(after)

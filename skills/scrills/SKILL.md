@@ -1,10 +1,10 @@
 ---
 name: scrills
 description: Python capability library you call from bash - a scrill is script + skill. Call existing scrills when they fit, including one-off requests; save operations worth reusing. Use direct tools and the project's runtime for ordinary development. Read this skill before first use.
-compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The bundled `scrills` command (scripts/scrills in this skill) goes on PATH or is called by path; no other runtime dependencies.
+compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The `scrills` command (scrills/scripts/scrills in the repository) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.3"
+  version: "0.3.4"
 ---
 
 # scrills
@@ -121,7 +121,7 @@ Document setup, dependencies, examples, side effects and state here.
 The IMAP quirks are in references/imap.md.
 ```
 
-- **README is required and is the only metadata source.** Neither a `SKILL.md` nor a frontmattered docstring substitutes for it. Missing/unreadable README is raised by `list` and refused by `read` and `run`; malformed metadata in a readable README remains a non-blocking notice. The product's own `scrills/SKILL.md` is different: it remains the native Agent Skill that teaches this command.
+- **README is required and is the only metadata source.** Neither a `SKILL.md` nor a frontmattered docstring substitutes for it. Missing/unreadable README is raised by `list` and refused by `read` and `run`; malformed metadata in a readable README remains a non-blocking notice. The product's own `skills/scrills/SKILL.md` is different: it remains the native Agent Skill that teaches this command.
 - The folder name is the import name: a valid Python identifier, lowercase — `_` where a skill name has `-`. Keep frontmatter `name` the same; `list` flags a mismatch and a missing description/version. An invalid name or missing/dangling `__init__.py` is named with its reason too.
 - **Keep one version declaration**, preferably `metadata.version`. Top-level `version` is also accepted. If both are declared, top-level is authoritative even when invalid/empty: it yields no version rather than silently falling back. Duplicate consumed keys are invalid, not first- or last-wins.
 - **Frontmatter is a restricted, line-oriented format, not full YAML.** Consumed fields (`name`, `description`, `version`, `compatibility`) take one-line text; only direct `metadata.version` is read nested. Use spaces for indentation. Comments are recognized outside quoted values; blanks/comments never hide a continuation. Single quotes support doubled apostrophes; double quotes support JSON-style escapes, but no decoded newlines/control characters. Block scalars, structured values, tags/anchors/aliases and unsupported quoting are diagnosed, never partially read. Unknown fields are not consumed. Quote descriptions containing punctuation such as the run line.

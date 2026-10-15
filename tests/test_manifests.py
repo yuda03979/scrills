@@ -292,7 +292,7 @@ def test_isolated_helper_loading_ignores_cwd_decoys(home, project):
 def test_installer_requires_the_shared_manifest_helper(tmp_path):
     repo = Path(CLI).parent.parent.parent
     clone = tmp_path / "clone"
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/SKILL.md"):
+    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "skills/scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)

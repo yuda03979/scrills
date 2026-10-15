@@ -1,7 +1,7 @@
 # working on scrills
 
 This file is for a coding agent changing this repository. If you want to *use* scrills, read
-[`scrills/SKILL.md`](scrills/SKILL.md) instead — that's the manual.
+[`skills/scrills/SKILL.md`](skills/scrills/SKILL.md) instead — that's the manual.
 
 ## The shape of the repo
 
@@ -11,15 +11,16 @@ scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize,
 scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
 scrills/scripts/_manifest.py    README metadata/source reading, shared by CLI and boot
 scrills/scripts/_history.py     direct output files, synchronous return, ID-based byte reads
-scrills/SKILL.md          the manual agents read; also where the version lives
+skills/scrills/SKILL.md   the manual agents read; also where the version lives
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
 install.sh                command symlink plus detected harness skill links, nothing else
 ```
 
-The command is a symlink into this repo, and the CLI finds `SKILL.md`, `_boot.py`,
-`_scrills_pth.py`, `_manifest.py` and `_history.py` by its own realpath. Keep `scrills/scripts/` and `scrills/SKILL.md` in that
-relationship. The boot and resolver are real files, never source-in-a-string: edit them
+The command is a symlink into this repo. By its own realpath, the CLI finds `_boot.py`,
+`_scrills_pth.py`, `_manifest.py` and `_history.py` beside it, and locates
+`skills/scrills/SKILL.md` from the repo root. Keep both paths in that relationship.
+The boot and resolver are real files, never source-in-a-string: edit them
 directly, lint them, and trust the compile guard in the suite. The run context reaches the boot
 as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin - argv
 carries no code. The shared manifest module is loaded by its absolute installation path,
@@ -28,7 +29,7 @@ listing, static reading and registry versions must never interpret README differ
 
 ## Rules that are not negotiable
 
-- **One folder, standard library only, Python 3.13+.** Everything under `scrills/scripts/`
+- **One runtime folder, standard library only, Python 3.13+.** Everything under `scrills/scripts/`
   imports nothing outside the stdlib. Both the launcher and shared venv must meet the minimum;
   no older-interpreter compatibility layer or automatic Python installation. CI runs Python
   3.13 on macOS and Linux, and the suite guards that grammar. Newer Python syntax/APIs within
@@ -40,8 +41,9 @@ listing, static reading and registry versions must never interpret README differ
   `help()` requires an import and never replaces that initial read. Never strip useful
   docstrings. Elsewhere prefer clear names over comments; the CLI keeps its explanation in
   one block at the top of the file and none below it.
-- **The version lives once**, in `scrills/SKILL.md` frontmatter under `metadata.version`. The CLI
-  reads it there; nothing else states a version number. Bump it for anything worth shipping.
+- **The version lives once**, in `skills/scrills/SKILL.md` frontmatter under
+  `metadata.version`. The CLI reads it there; nothing else states a version number.
+  Bump it for anything worth shipping.
 - **The frontmatter follows the Agent Skills spec**: only `name`, `description`, `license`,
   `compatibility`, `metadata` and `allowed-tools`, with `name` matching the directory. A test
   enforces it. Individual scrill READMEs deliberately differ — see below.
@@ -51,8 +53,8 @@ listing, static reading and registry versions must never interpret README differ
 ## Scrill manuals are not native harness skills
 
 A scrill's `README.md` uses Skills-style metadata, but the filename and Python identifier
-names are deliberately different. Only the product's `scrills/SKILL.md` is an Agent Skill;
-its filename, version source and installation links stay unchanged.
+names are deliberately different. Only the product's `skills/scrills/SKILL.md` is an Agent Skill;
+its filename, version source and installation links must stay consistent.
 
 The shared reader consumes one-line text for `name`, `description`, `version`, `compatibility`,
 plus direct `metadata.version`. It is not a full YAML parser. Comments and blank lines cannot
@@ -104,7 +106,7 @@ uvx --with-requirements docs/requirements.txt mkdocs serve
 uvx --with-requirements docs/requirements.txt mkdocs build --strict
 ```
 
-`docs/manual.md` includes `scrills/SKILL.md` by snippet — one source for the manual. Don't
+`docs/manual.md` includes `skills/scrills/SKILL.md` by snippet — one source for the manual. Don't
 paste its content into the docs tree. The include skips the file's frontmatter by line offset;
 `test_docs_include_offsets` pins the offset to the real block — if it fails, fix the offset,
 never the assertion.

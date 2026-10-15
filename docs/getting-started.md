@@ -40,12 +40,12 @@ curl -fsSL https://raw.githubusercontent.com/yuda03979/scrills/main/install.sh |
 
 ```bash
 mkdir -p ~/.local/bin && ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
-mkdir -p ~/.claude/skills && ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
+mkdir -p ~/.claude/skills && ln -s "$PWD/skills/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
-ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
+ln -s "$PWD/skills/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
 
-(`~/.local/bin` should be on your PATH; any directory on it works — `SCRILLS_BIN=/elsewhere ./install.sh`. Symlink, don't copy the file out: the command reads its version and manual from the `scrills/` folder next to it, and the symlink makes `git pull` your upgrade path.)
+(`~/.local/bin` should be on your PATH; any directory on it works — `SCRILLS_BIN=/elsewhere ./install.sh`. Symlink, don't copy the file out: the command locates its version in the clone's `skills/scrills/SKILL.md` by its own realpath, and the symlink makes `git pull` your upgrade path.)
 
 That's the whole install. The first `py` or `run` creates a shared environment at `~/.scrills/.venv` using the launching Python — a few seconds, once.
 
@@ -138,7 +138,7 @@ The anatomy, in order of importance:
 
 `scrills read <name>` labels both files with absolute paths, line counts and end markers. Nothing is internally truncated. If your harness clips the output, continue with its file reader at the printed paths. Read/decode failure returns exit 1, with any readable material still shown; bad arguments or an unknown name return 2. Syntax and metadata notices do not hide source. `help()` is for API lookup after review: it imports code and does not read the README.
 
-Older scrills must move their manual and metadata from SKILL.md or the head docstring into `README.md`, keeping API guidance in the entry docstring. Reconcile an existing README, and keep only one version declaration. There is no fallback or automatic migration. `run` refuses a missing/unreadable README before importing anything; native Python imports remain ordinary Python, not a validation boundary. The product's own `scrills/SKILL.md` remains the teaching skill and is not renamed.
+Older scrills must move their manual and metadata from SKILL.md or the head docstring into `README.md`, keeping API guidance in the entry docstring. Reconcile an existing README, and keep only one version declaration. There is no fallback or automatic migration. `run` refuses a missing/unreadable README before importing anything; native Python imports remain ordinary Python, not a validation boundary. The product's own `skills/scrills/SKILL.md` remains the teaching skill; individual scrill manuals still use README.md.
 
 ## The two layers
 
@@ -220,7 +220,7 @@ pip behind it — arguments pass through (`-U`, `==` pins, `-r`), and `scrills w
 
 ## Teach your agent
 
-Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise the skill-link lines are in the by-hand Install block above, and for any other harness, paste `scrills/SKILL.md` into the session or reference its path.
+Scrills are built for coding agents: the library is how capability survives the end of a session. Point your harness at the manual, `skills/scrills/SKILL.md`. `install.sh` already did this for detected Claude Code and Pi installs; otherwise the skill-link lines are in the by-hand Install block above, and for any other harness, paste `skills/scrills/SKILL.md` into the session or reference its path.
 
 Scrills does not modify harness settings, permissions, hooks, models, or extensions. Those remain under the control of the user and harness. Run Pi's `/reload` after changing skill resources in an existing session.
 

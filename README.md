@@ -48,9 +48,9 @@ hand instead:
 
 ```bash
 ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
-ln -s "$PWD/scrills" ~/.claude/skills/scrills   # optional: Claude Code
+ln -s "$PWD/skills/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
-ln -s "$PWD/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
+ln -s "$PWD/skills/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
 
 Upgrading an existing environment built with older Python? Remove only `~/.scrills/.venv`
@@ -149,7 +149,7 @@ caller needs, including completeness and retrieval where relevant. The slug
 walkthrough in Getting started demonstrates a compact contract without a fixed schema.
 
 README is the only metadata source. Older SKILL.md/docstring manuals must be moved into it;
-there is no legacy fallback or automatic migration. The teaching skill at `scrills/SKILL.md`
+there is no legacy fallback or automatic migration. The teaching skill at `skills/scrills/SKILL.md`
 stays an ordinary Agent Skill — individual scrill READMEs are not native harness skills.
 
 ## Two layers
@@ -173,7 +173,7 @@ between people.
 ## Docs
 
 - [Getting started](https://github.com/yuda03979/scrills/blob/main/docs/getting-started.md) — install, first use, first scrill, layers, packages
-- [The manual](https://github.com/yuda03979/scrills/blob/main/scrills/SKILL.md) — what an agent reads; also the full surface
+- [The manual](https://github.com/yuda03979/scrills/blob/main/skills/scrills/SKILL.md) — what an agent reads; also the full surface
 
 Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 
