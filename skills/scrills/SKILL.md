@@ -4,7 +4,7 @@ description: Python capability library you call from bash - a scrill is script +
 compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The `scrills` command (scrills/scripts/scrills in the repository) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.5"
+  version: "0.3.6"
 ---
 
 # scrills
@@ -176,3 +176,7 @@ The `_slug` copy stays hidden during the copy; the final rename publishes the co
 - **If `read` fails:** It still shows files it could read. Exit 1 means a file read/decode failure; exit 2 means bad arguments or a missing or ignored name. `help()` imports code, so use it only after reviewing the source.
 - **Runtime repair:** Both the launching `python3` and shared venv must be Python 3.13+. For an older or broken venv, remove only `<user library>/.venv`, rerun with a supported Python and reinstall packages. Your library, state and saved output remain.
 - **Run details:** Records live in `<user library>/.runs/log.jsonl`. Set `SCRILLS_WHO=<harness>:<session>` for attribution. A valid `TRACEPARENT` joins nested runs into a trace. These are optional; you can call a scrill without them.
+
+## More detail
+
+The extra discovery, execution, authoring and integration details are in `reference/details.md` beside this skill. Read the sections relevant to your task when you need them.
