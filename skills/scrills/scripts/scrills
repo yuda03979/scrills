@@ -3,7 +3,7 @@
 #
 # A scrill is a folder in a .scrills directory: <name>/__init__.py and a required README.md.
 # README is the human/agent manual and the only metadata source; entry docstrings explain
-# the API and implementation. There are no legacy manual fallbacks. _manifest.py is the one
+# the API and implementation. There are no legacy manual fallbacks. _runtime.py holds the one
 # restricted parser used by list, read and the registry, loaded by installation path under -I.
 # read prints the entire README and entry source, never importing the target, creating a venv
 # or recording a run. Follow relevant implementation imports before execution: reading the
@@ -21,7 +21,7 @@
 # list points at it.
 #
 # The venv is the runtime; this CLI is a thin dispatcher. The resolver lives inside the venv
-# (site-packages/_scrills_pth.py + scrills.pth, copied from scripts/_scrills_pth.py beside this
+# (site-packages/_scrills_pth.py + scrills.pth, copied from scripts/_resolver.py beside this
 # file and rewritten atomically whenever the bundled source changes): at every interpreter start
 # it synthesizes the `scrills` package over the layer dirs in $SCRILLS_LAYERS (else the user
 # library), so siblings import relatively, one scrill imports
@@ -37,7 +37,7 @@
 # $SCRILLS_ECHO_CAP chars, default 8192, 0 = uncapped), top level may await, the snippet runs in
 # a real __main__ module, and nothing persists between calls. Code travels to the child over
 # stdin, never argv, so secrets stay out of ps. Both verbs execv the venv python onto
-# scripts/_boot.py, a real file beside this one - no generated source: the run context travels as
+# scripts/_runtime.py, a real file beside this one - no generated source: the run context travels as
 # JSON in SCRILLS_BOOT_CTX (popped the moment the boot starts, so nothing downstream sees it) and
 # the child's argv carries no code at all. For run, the boot clears its __main__ file identity so
 # multiprocessing spawn/forkserver workers don't re-execute the boot as the user's main file.
@@ -83,7 +83,7 @@
 # Responses are separate: every admitted py/run automatically retains stdout and stderr under
 # <home>/.results/<id>. Output goes directly to files. The boot's finalizer returns the saved
 # response with an ID on stderr BEFORE exiting, so nested callers cannot overtake its output.
-# _history.py saves that same output and retrieves bytes by ID; no metadata or live copier.
+# _runtime.py saves that same output and retrieves bytes by ID; no metadata or live copier.
 # Setup failure warns and runs normally without saved output. No input/code/argv is stored.
 # Output may contain secrets; it stays until explicitly removed.
 #
@@ -108,14 +108,10 @@ import time
 
 SCRIPT = os.path.realpath(__file__)
 os.environ["SCRILLS_CLI"] = SCRIPT
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT)))
-SKILL_FILE = os.path.join(REPO_ROOT, "skills", "scrills", "SKILL.md")
-BOOT_FILE = os.path.join(os.path.dirname(SCRIPT), "_boot.py")
-PTH_SOURCE = os.path.join(os.path.dirname(SCRIPT), "_scrills_pth.py")
-MANIFEST_FILE = os.path.join(os.path.dirname(SCRIPT), "_manifest.py")
-HISTORY_FILE = os.path.join(os.path.dirname(SCRIPT), "_history.py")
-_MANIFEST = None
-_HISTORY = None
+SKILL_FILE = os.path.join(os.path.dirname(os.path.dirname(SCRIPT)), "SKILL.md")
+RUNTIME_FILE = os.path.join(os.path.dirname(SCRIPT), "_runtime.py")
+PTH_SOURCE = os.path.join(os.path.dirname(SCRIPT), "_resolver.py")
+_RUNTIME = None
 USAGE = """usage: scrills <verb>
   list               the library, one "- name: description" line per scrill
   read <name>        read the full README and entry source, without importing
@@ -320,35 +316,22 @@ def read_text(path):
         return None
 
 
-def manifest_module():
-    global _MANIFEST
-    if _MANIFEST is None:
+def runtime_module():
+    global _RUNTIME
+    if _RUNTIME is None:
         try:
-            spec = importlib.util.spec_from_file_location("_scrills_manifest", MANIFEST_FILE)
+            spec = importlib.util.spec_from_file_location("_scrills_runtime", RUNTIME_FILE)
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
         except (OSError, SyntaxError) as error:
-            fail(f"scrills: cannot load {MANIFEST_FILE}: {error}\nReinstall keeping the scrills/ folder intact")
-        _MANIFEST = module
-    return _MANIFEST
-
-
-def history_module():
-    global _HISTORY
-    if _HISTORY is None:
-        try:
-            spec = importlib.util.spec_from_file_location("_scrills_history", HISTORY_FILE)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        except (OSError, SyntaxError) as error:
-            fail(f"scrills: cannot load {HISTORY_FILE}: {error}\nReinstall keeping the scrills/ folder intact")
-        _HISTORY = module
-    return _HISTORY
+            fail(f"scrills: cannot load {RUNTIME_FILE}: {error}\nReinstall keeping the skills/scrills/ folder intact")
+        _RUNTIME = module
+    return _RUNTIME
 
 
 def entry_documents(name, entry):
-    reader = manifest_module()
+    reader = runtime_module()
     manual = reader.read_manual(entry)
     source, notices, error = reader.read_source(entry)
     notices = manual.metadata.notices + notices
@@ -777,7 +760,7 @@ def ensure_pth(home):
     wrote = False
     pth_source = read_text(PTH_SOURCE)
     if pth_source is None:
-        fail(f"scrills: {PTH_SOURCE} is missing - reinstall keeping the scrills/ folder intact")
+        fail(f"scrills: {PTH_SOURCE} is missing - reinstall keeping the skills/scrills/ folder intact")
     for filename, text in (
         ("_scrills_pth.py", pth_source),
         ("scrills.pth", "import _scrills_pth; _scrills_pth.install()\n"),
@@ -841,10 +824,9 @@ def boot_ctx(home, verb, card, lock_fd, started, run_id, trace, flags, known):
 
 
 def boot_path():
-    for path in (BOOT_FILE, MANIFEST_FILE, HISTORY_FILE):
-        if not os.path.isfile(path):
-            fail(f"scrills: {path} is missing - reinstall keeping the scrills/ folder intact")
-    return BOOT_FILE
+    if not os.path.isfile(RUNTIME_FILE):
+        fail(f"scrills: {RUNTIME_FILE} is missing - reinstall keeping the skills/scrills/ folder intact")
+    return RUNTIME_FILE
 
 
 def version():
@@ -884,10 +866,10 @@ def execute(home, found, verb, name, layer, argv, boot):
     trace, parent, flags = lineage()
     info = make_card(verb, name, layer, os.getpid(), run_id, trace, parent)
     try:
-        response = history_module().start(home, run_id)
+        response = runtime_module().start_response(home, run_id)
     except (OSError, ValueError) as error:
         response = None
-        history_module().notice(2, f"scrills: cannot prepare response history: {error}; running without saved output")
+        runtime_module().notice(2, f"scrills: cannot prepare response history: {error}; running without saved output")
     card, lock_fd = register(home, info)
     context = boot_ctx(home, verb, card, lock_fd, time.time(), run_id, trace, flags, known_names(found))
     context.update(history=response)
@@ -918,7 +900,7 @@ def cmd_run(argv):
     warn_shadows(found)
     warn_lost_project(home, found)
     provider = resolve_entry(name, found, "run")
-    manual = manifest_module().read_manual(provider["entry"])
+    manual = runtime_module().read_manual(provider["entry"])
     if manual.error is not None:
         fail(f"scrills run: {name} is not ready - {manual.error}", 2)
     execute(home, found, "run", name, provider["layer"], [name, *argv[1:]], boot)
@@ -1171,7 +1153,7 @@ def main():
     elif verb == "ps":
         cmd_ps(rest)
     elif verb == "history":
-        sys.exit(history_module().show(user_home(), rest))
+        sys.exit(runtime_module().show_history(user_home(), rest))
     elif verb == "where":
         cmd_where(rest)
     else:

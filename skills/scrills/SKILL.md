@@ -1,10 +1,10 @@
 ---
 name: scrills
 description: Python capability library you call from bash - a scrill is script + skill. Call existing scrills when they fit, including one-off requests; save operations worth reusing. Use direct tools and the project's runtime for ordinary development. Read this skill before first use.
-compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The `scrills` command (scrills/scripts/scrills in the repository) goes on PATH or is called by path; no other runtime dependencies.
+compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The `scrills` command (scripts/scrills beside this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.6"
+  version: "0.3.7"
 ---
 
 # scrills
@@ -177,6 +177,16 @@ The `_slug` copy stays hidden during the copy; the final rename publishes the co
 - **Runtime repair:** Both the launching `python3` and shared venv must be Python 3.13+. For an older or broken venv, remove only `<user library>/.venv`, rerun with a supported Python and reinstall packages. Your library, state and saved output remain.
 - **Run details:** Records live in `<user library>/.runs/log.jsonl`. Set `SCRILLS_WHO=<harness>:<session>` for attribution. A valid `TRACEPARENT` joins nested runs into a trace. These are optional; you can call a scrill without them.
 
-## More detail
+## Reference
 
-The extra discovery, execution, authoring and integration details are in `reference/details.md` beside this skill. Read the sections relevant to your task when you need them.
+Read the sections of the [usage reference](reference/usage-reference.md) relevant to your task:
+
+| You need | Read |
+|---|---|
+| Library precedence, discovery and static reading | [Discovery and reading](reference/usage-reference.md#discovery-and-reading) |
+| Function calls, program inputs and async execution | [Calling and inputs](reference/usage-reference.md#calling-and-inputs) |
+| Output capture, recovery and byte pagination | [Saved output and history](reference/usage-reference.md#saved-output-and-history) |
+| Run status, attribution and process lifetime | [Run records and lifetime](reference/usage-reference.md#run-records-and-lifetime) |
+| Scrill manuals, folder layout and imports | [Manuals, layout and composition](reference/usage-reference.md#manuals-layout-and-composition) |
+| Metadata syntax and package dependencies | [Frontmatter and dependencies](reference/usage-reference.md#frontmatter-and-dependencies) |
+| Promotion, scheduling, editors and runtime repair | [Promotion, scheduling and other integrations](reference/usage-reference.md#promotion-scheduling-and-other-integrations) |

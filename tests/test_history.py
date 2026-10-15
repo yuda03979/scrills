@@ -454,13 +454,13 @@ def test_missing_history_helper_fails_before_registration(home, project):
     scripts = project / "broken-install"
     scripts.mkdir()
     for source in Path(CLI).parent.iterdir():
-        if source.is_file() and source.name != "_history.py":
+        if source.is_file() and source.name != "_runtime.py":
             shutil.copy2(source, scripts / source.name)
     before = (Path(home) / ".runs" / "log.jsonl").read_bytes()
     result = subprocess.run([sys.executable, str(scripts / "scrills"), "py"], input="print('must not execute')",
                             env={**base_env(), "SCRILLS_HOME": str(home)}, cwd=project,
                             capture_output=True, text=True, timeout=30)
-    assert result.returncode == 1 and "_history.py" in result.stderr
+    assert result.returncode == 1 and "_runtime.py" in result.stderr
     assert "must not execute" not in result.stdout
     assert (Path(home) / ".runs" / "log.jsonl").read_bytes() == before
 

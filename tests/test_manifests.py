@@ -267,21 +267,21 @@ def test_read_names_a_readme_folder_missing_its_entry(tmp_path):
 def test_missing_manifest_helper_refuses_before_registering(home, tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    for filename in ("scrills", "_boot.py", "_scrills_pth.py"):
+    for filename in ("scrills", "_resolver.py"):
         shutil.copy2(Path(CLI).parent / filename, scripts / filename)
     result = subprocess.run(
         [sys.executable, str(scripts / "scrills"), "py"], input="print('must not execute')",
         cwd=tmp_path, env={**base_env(), "SCRILLS_HOME": str(home)}, capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 1
-    assert "_manifest.py" in result.stderr and "reinstall" in result.stderr
+    assert "_runtime.py" in result.stderr and "reinstall" in result.stderr
     assert "must not execute" not in result.stdout
     assert not list((Path(home) / ".runs").glob("[0-9]*.json"))
 
 
 def test_isolated_helper_loading_ignores_cwd_decoys(home, project):
     make_scrill(project / ".scrills", text=manual("version: 1.0.0"))
-    (project / "_manifest.py").write_text('raise RuntimeError("cwd helper executed")\n')
+    (project / "_runtime.py").write_text('raise RuntimeError("cwd helper executed")\n')
     reading = scrills(["read", "probe"], home, project)
     assert reading.returncode == 0, reading.stderr
     ran = scrills(["run", "probe"], home, project)
@@ -290,9 +290,9 @@ def test_isolated_helper_loading_ignores_cwd_decoys(home, project):
 
 
 def test_installer_requires_the_shared_manifest_helper(tmp_path):
-    repo = Path(CLI).parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     clone = tmp_path / "clone"
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "skills/scrills/SKILL.md"):
+    for relative in ("install.sh", "skills/scrills/scripts/scrills", "skills/scrills/scripts/_resolver.py", "skills/scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
@@ -301,13 +301,13 @@ def test_installer_requires_the_shared_manifest_helper(tmp_path):
                             env={**base_env(), "HOME": str(tmp_path / "home"), "SCRILLS_BIN": str(bin_dir)},
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 1
-    assert "_manifest.py" in result.stderr
+    assert "_runtime.py" in result.stderr
     assert not (bin_dir / "scrills").exists()
 
 
 @pytest.fixture(scope="module")
 def reader():
-    spec = importlib.util.spec_from_file_location("manifest_under_test", Path(CLI).with_name("_manifest.py"))
+    spec = importlib.util.spec_from_file_location("manifest_under_test", Path(CLI).with_name("_runtime.py"))
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

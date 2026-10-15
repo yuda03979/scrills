@@ -40,7 +40,7 @@ if [ -f "$0" ]; then
     here=$(cd "$(dirname "$0")" && pwd)
 fi
 
-if [ -n "$here" ] && [ -d "$here/scrills" ]; then
+if [ -n "$here" ] && [ -d "$here/skills/scrills" ]; then
     root=$here
     echo "installing from this clone: $root"
 else
@@ -56,13 +56,13 @@ else
     root=$SRC
 fi
 
-for required in scrills/scripts/scrills scrills/scripts/_boot.py scrills/scripts/_scrills_pth.py scrills/scripts/_manifest.py scrills/scripts/_history.py skills/scrills/SKILL.md; do
+for required in skills/scrills/scripts/scrills skills/scrills/scripts/_runtime.py skills/scrills/scripts/_resolver.py skills/scrills/SKILL.md; do
     [ -f "$root/$required" ] || { echo "install.sh: missing required file $required under $root" >&2; exit 1; }
 done
 
 mkdir -p "$BIN"
-ln -sfn "$root/scrills/scripts/scrills" "$BIN/scrills"
-echo "linked   $BIN/scrills -> $root/scrills/scripts/scrills"
+ln -sfn "$root/skills/scrills/scripts/scrills" "$BIN/scrills"
+echo "linked   $BIN/scrills -> $root/skills/scrills/scripts/scrills"
 
 linked_skills=
 link_skill() {

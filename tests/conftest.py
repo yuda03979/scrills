@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-BOOTSTRAP_CLI = str(Path(__file__).resolve().parent.parent / "scrills" / "scripts" / "scrills")
+BOOTSTRAP_CLI = str(Path(__file__).resolve().parent.parent / "skills" / "scrills" / "scripts" / "scrills")
 
 
 def base_env():

@@ -39,13 +39,15 @@ curl -fsSL https://raw.githubusercontent.com/yuda03979/scrills/main/install.sh |
 `install.sh` makes symlinks and stops: `scrills` on your PATH, plus the manual for detected Claude Code and Pi installs. Read it before you run it — it's short, and reading before running is the habit this whole thing is built around. By hand:
 
 ```bash
-mkdir -p ~/.local/bin && ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
+mkdir -p ~/.local/bin && ln -s "$PWD/skills/scrills/scripts/scrills" ~/.local/bin/scrills
 mkdir -p ~/.claude/skills && ln -s "$PWD/skills/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
 ln -s "$PWD/skills/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
 
 (`~/.local/bin` should be on your PATH; any directory on it works — `SCRILLS_BIN=/elsewhere ./install.sh`. Symlink, don't copy the file out: the command locates its version in the clone's `skills/scrills/SKILL.md` by its own realpath, and the symlink makes `git pull` your upgrade path.)
+
+Upgrading from the old root-level runtime layout? Rerun `./install.sh` after pulling to refresh the command symlink. The runtime now lives inside `skills/scrills/scripts/`; keep the whole skill directory together.
 
 That's the whole install. The first `py` or `run` creates a shared environment at `~/.scrills/.venv` using the launching Python — a few seconds, once.
 

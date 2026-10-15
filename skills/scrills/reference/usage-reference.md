@@ -1,4 +1,4 @@
-# Scrills reference
+# Scrills usage reference
 
 The main `SKILL.md` gives the normal find → read → call path. This file holds the details that do not need to be in that first read. Use the section that fits your task. It describes the same CLI, not another kind of scrill.
 

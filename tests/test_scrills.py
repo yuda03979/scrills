@@ -21,8 +21,8 @@ import pytest
 
 from conftest import base_env
 
-CLI = str(Path(__file__).resolve().parent.parent / "scrills" / "scripts" / "scrills")
 SKILL = Path(__file__).resolve().parent.parent / "skills" / "scrills" / "SKILL.md"
+CLI = str(SKILL.parent / "scripts" / "scrills")
 
 
 def scrills(args, home, cwd, stdin=None, extra_env=None):
@@ -627,7 +627,7 @@ def test_run_argv_carries_no_boot_source(home, project):
             time.sleep(0.05)
         assert card.exists()
         argv = subprocess.run(["ps", "-ww", "-p", str(child.pid), "-o", "command="], capture_output=True, text=True).stdout
-        assert "_boot.py" in argv
+        assert "_runtime.py" in argv
         assert "import atexit" not in argv  # the boot source no longer travels in argv
         assert "CARD =" not in argv  # and neither does the interpolated run card
     finally:
@@ -638,7 +638,7 @@ def test_run_argv_carries_no_boot_source(home, project):
 def test_missing_boot_file_fails_cleanly(home, project, tmp_path):
     fake_scripts = tmp_path / "scripts"
     fake_scripts.mkdir()
-    for name in ("scrills", "_scrills_pth.py"):
+    for name in ("scrills", "_resolver.py"):
         (fake_scripts / name).write_text((Path(CLI).parent / name).read_text())
     result = subprocess.run(
         [sys.executable, str(fake_scripts / "scrills"), "py"],
@@ -649,7 +649,7 @@ def test_missing_boot_file_fails_cleanly(home, project, tmp_path):
         text=True,
     )
     assert result.returncode == 1
-    assert "_boot.py is missing" in result.stderr
+    assert "_runtime.py is missing" in result.stderr
     assert "can't open file" not in result.stderr
     assert not cards(home, "py")  # the refusal happens before a run is registered
 
@@ -2329,7 +2329,7 @@ def test_indented_docstrings_never_supply_metadata(home, project):
 
 
 def test_install_sh_requires_python_313_before_writing(tmp_path):
-    repo = Path(CLI).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     fake_python = fake_bin / "python3"
@@ -2355,7 +2355,7 @@ def test_install_sh_requires_python_313_before_writing(tmp_path):
 
 
 def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
-    repo = Path(CLI).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     for label, launch in (("sh", ["sh", "install.sh", "--no-skill"]), ("dot", ["./install.sh", "--no-skill"])):
         bin_dir = tmp_path / f"bin-{label}"
         env = {
@@ -2375,12 +2375,12 @@ def test_install_sh_installs_the_clone_it_sits_in(tmp_path):
 
 @pytest.mark.parametrize(
     "missing",
-    ["scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "skills/scrills/SKILL.md"],
+    ["skills/scrills/scripts/_runtime.py", "skills/scrills/scripts/_resolver.py", "skills/scrills/SKILL.md"],
 )
 def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
-    repo = Path(CLI).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     clone = tmp_path / missing.replace("/", "-")
-    for relative in ("install.sh", "scrills/scripts/scrills", "scrills/scripts/_boot.py", "scrills/scripts/_scrills_pth.py", "scrills/scripts/_manifest.py", "scrills/scripts/_history.py", "skills/scrills/SKILL.md"):
+    for relative in ("install.sh", "skills/scrills/scripts/scrills", "skills/scrills/scripts/_runtime.py", "skills/scrills/scripts/_resolver.py", "skills/scrills/SKILL.md"):
         target = clone / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, target)
@@ -2399,7 +2399,7 @@ def test_install_sh_rejects_an_incomplete_clone(tmp_path, missing):
 
 
 def test_install_sh_links_the_skill_for_claude_and_pi(tmp_path):
-    repo = Path(CLI).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     fake = tmp_path / "fakehome"
     claude_skills = fake / ".claude" / "skills"
     pi_agent = fake / "custom-pi-agent"
@@ -2603,7 +2603,7 @@ def test_scrills_home_is_a_file_fails_cleanly(tmp_path):
 
 
 def test_runtime_files_parse_under_minimum_python():
-    for name in ("scrills", "_boot.py", "_scrills_pth.py", "_manifest.py", "_history.py"):
+    for name in ("scrills", "_runtime.py", "_resolver.py"):
         source = (Path(CLI).parent / name).read_text()
         ast.parse(source, filename=name, feature_version=(3, 13))
 
@@ -2611,7 +2611,7 @@ def test_runtime_files_parse_under_minimum_python():
 def test_docs_include_offsets():
     # docs pages include repo files by line offset; the offset must skip exactly the intended
     # head block, or edits leak frontmatter/title text into the built site silently
-    repo = Path(CLI).resolve().parent.parent.parent
+    repo = Path(__file__).resolve().parent.parent
     skill_lines = (repo / "skills" / "scrills" / "SKILL.md").read_text().splitlines()
     closing = skill_lines.index("---", 1)
     assert skill_lines[0] == "---"

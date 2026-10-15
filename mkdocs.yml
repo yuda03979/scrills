@@ -32,6 +32,7 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - The manual: manual.md
+  - Usage reference: reference/usage-reference.md
 
 markdown_extensions:
   - admonition

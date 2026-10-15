@@ -47,11 +47,15 @@ installs. Symlinks only — `git pull` is the upgrade path, and `rm` is the unin
 hand instead:
 
 ```bash
-ln -s "$PWD/scrills/scripts/scrills" ~/.local/bin/scrills
+ln -s "$PWD/skills/scrills/scripts/scrills" ~/.local/bin/scrills
 ln -s "$PWD/skills/scrills" ~/.claude/skills/scrills   # optional: Claude Code
 mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills"
 ln -s "$PWD/skills/scrills" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/skills/scrills"   # optional: Pi
 ```
+
+If your command still links to the old root-level runtime, rerun `./install.sh` after
+pulling to point it at `skills/scrills/scripts/scrills`. Keep the whole skill directory intact;
+it contains both the manual and the runtime.
 
 Upgrading an existing environment built with older Python? Remove only `~/.scrills/.venv`
 (or `$SCRILLS_HOME/.venv`), rerun with Python 3.13+, then reinstall its packages with

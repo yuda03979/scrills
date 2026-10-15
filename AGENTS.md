@@ -6,31 +6,34 @@ This file is for a coding agent changing this repository. If you want to *use* s
 ## The shape of the repo
 
 ```
-scrills/scripts/scrills   the CLI: discovery, gating, dispatch - stdlib only
-scrills/scripts/_boot.py  what every py/run child execs onto (registry finalize, the two bodies)
-scrills/scripts/_scrills_pth.py  the resolver source, copied into the venv's site-packages
-scrills/scripts/_manifest.py    README metadata/source reading, shared by CLI and boot
-scrills/scripts/_history.py     direct output files, synchronous return, ID-based byte reads
-skills/scrills/SKILL.md   the manual agents read; also where the version lives
+skills/scrills/SKILL.md                the manual, reference index and sole version source
+skills/scrills/scripts/scrills         the CLI: discovery, gating, dispatch - stdlib only
+skills/scrills/scripts/_runtime.py     metadata, saved output/history and py/run execution
+skills/scrills/scripts/_resolver.py    lightweight resolver source copied into site-packages
+skills/scrills/reference/usage-reference.md  detailed usage, linked by topic from SKILL.md
 tests/                    subprocess tests that drive the real CLI
 docs/                     the documentation site
 install.sh                command symlink plus detected harness skill links, nothing else
 ```
 
-The command is a symlink into this repo. By its own realpath, the CLI finds `_boot.py`,
-`_scrills_pth.py`, `_manifest.py` and `_history.py` beside it, and locates
-`skills/scrills/SKILL.md` from the repo root. Keep both paths in that relationship.
-The boot and resolver are real files, never source-in-a-string: edit them
-directly, lint them, and trust the compile guard in the suite. The run context reaches the boot
-as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin - argv
-carries no code. The shared manifest module is loaded by its absolute installation path,
-not by adding a directory to `sys.path` (`-I` excludes sibling imports). Keep one parser:
-listing, static reading and registry versions must never interpret README differently.
+The command is a symlink into this repo. By its own realpath, the CLI finds `_runtime.py`
+and `_resolver.py` beside it, and `SKILL.md` one directory above scripts. The skill directory
+is self-contained; keep those paths together. Rerun `install.sh` after moving the command
+so an existing PATH symlink does not keep pointing to the old location.
+The runtime and resolver are real files, never source-in-a-string: edit them directly,
+lint them, and trust the compile guard in the suite. The run context reaches the runtime's
+`boot()` as JSON in `SCRILLS_BOOT_CTX` (popped on entry); a `py` snippet reaches it on stdin -
+argv carries no code. Importing `_runtime.py` must not start execution or consume that context.
+The CLI loads it by absolute installation path, not by adding a directory to `sys.path`
+(`-I` excludes sibling imports). Keep one parser: listing, static reading and registry versions
+must never interpret README differently. `_resolver.py` stays lightweight; its installed copy
+retains the `_scrills_pth.py` name for the existing venv startup hooks.
 
 ## Rules that are not negotiable
 
-- **One runtime folder, standard library only, Python 3.13+.** Everything under `scrills/scripts/`
-  imports nothing outside the stdlib. Both the launcher and shared venv must meet the minimum;
+- **One runtime folder, standard library only, Python 3.13+.** `skills/scrills/scripts/` contains
+  only the `scrills` command and two helpers, `_runtime.py` and `_resolver.py`. They import
+  nothing outside the stdlib. Both the launcher and shared venv must meet the minimum;
   no older-interpreter compatibility layer or automatic Python installation. CI runs Python
   3.13 on macOS and Linux, and the suite guards that grammar. Newer Python syntax/APIs within
   this floor are welcome; do not preserve older-Python workarounds.
@@ -87,7 +90,7 @@ The two-root-file scrill layout remains authoring guidance, not enforcement.
 uv run --python 3.13 --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **268 passed** on Python 3.13. The suite drives the real CLI as a subprocess against a session-scoped
+Expect **266 passed** on Python 3.13. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 
@@ -106,7 +109,9 @@ uvx --with-requirements docs/requirements.txt mkdocs serve
 uvx --with-requirements docs/requirements.txt mkdocs build --strict
 ```
 
-`docs/manual.md` includes `skills/scrills/SKILL.md` by snippet — one source for the manual. Don't
-paste its content into the docs tree. The include skips the file's frontmatter by line offset;
+`docs/manual.md` includes `skills/scrills/SKILL.md` by snippet — one source for the manual.
+`docs/reference/usage-reference.md` likewise includes the skill's reference, so the topic links
+work on the docs site without duplicated prose. Don't paste either source into the docs tree.
+The manual include skips the file's frontmatter by line offset;
 `test_docs_include_offsets` pins the offset to the real block — if it fails, fix the offset,
 never the assertion.

@@ -1,4 +1,4 @@
-# scrills resolver (installed copy - the source is scripts/_scrills_pth.py in the repo; the CLI
+# scrills resolver (installed copy - the source is scripts/_resolver.py in the skill; the CLI
 # rewrites this file atomically when the source changes).
 # install() runs at every interpreter start in this venv, called by scrills.pth (a .pth import
 # line, processed through Python 3.17) or scrills.start (PEP 829, understood from 3.15 - the
