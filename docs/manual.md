@@ -1,7 +1,7 @@
 # The manual
 
 This is `skills/scrills/SKILL.md` in the repository, unmodified — the file an agent reads when it picks
-up the skill, and the fullest description of the surface. Point your harness at it: Claude Code
+up the skill. The full surface is in the [usage reference](reference/usage-reference.md). Point your harness at it: Claude Code
 takes a symlink at `~/.claude/skills/scrills`, Pi at `~/.pi/agent/skills/scrills` (or under
 `$PI_CODING_AGENT_DIR`), and anything else can take the file pasted into the session.
 

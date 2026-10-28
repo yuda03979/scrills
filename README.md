@@ -177,7 +177,8 @@ between people.
 ## Docs
 
 - [Getting started](https://github.com/yuda03979/scrills/blob/main/docs/getting-started.md) — install, first use, first scrill, layers, packages
-- [The manual](https://github.com/yuda03979/scrills/blob/main/skills/scrills/SKILL.md) — what an agent reads; also the full surface
+- [The manual](https://github.com/yuda03979/scrills/blob/main/skills/scrills/SKILL.md) — what an agent reads
+- [Usage reference](https://github.com/yuda03979/scrills/blob/main/skills/scrills/reference/usage-reference.md) — the full surface, by topic
 
 Built locally with `uvx --with-requirements docs/requirements.txt mkdocs serve`.
 
