@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # scrills: skills you import instead of read. Python 3.13+, stdlib only, driven from bash in any harness.
 #
-# A scrill is a folder in a .scrills directory: <name>/__init__.py and a required README.md.
+# A scrill is a package under .scrills: <groups>/<name>/__init__.py and a required README.md.
+# Groups have no initializer. A static namespace walk shares Python's package/module/namespace
+# precedence across layers; concrete packages stop discovery, including undocumented ones.
+# List/read/run use dotted leaf identities, never import parents, and report namespace blockers.
+# Branch-local realpath ancestry stops symlink cycles without hiding independent aliases.
 # README is the human/agent manual and the only metadata source; entry docstrings explain
 # the API and implementation. There are no legacy manual fallbacks. _runtime.py holds the one
 # restricted parser used by list, read and the registry, loaded by installation path under -I.
@@ -12,9 +16,8 @@
 # when SCRILLS_HOME points elsewhere, and never one owned by another uid - that one is ignored
 # aloud, the CVE-2022-24765 class), then the user library at $SCRILLS_HOME or ~/.scrills, which
 # also hosts the generated .venv. A folder whose name starts with '_' is an invisible draft.
-# A folder that can never resolve as a scrill - a name that is not a valid identifier, or a
-# missing or dangling __init__.py, which Python would otherwise import as an empty namespace
-# package - is named with its reason by list and by run's refusal, never silently skipped. A
+# Invalid components and incomplete scrill-shaped folders are named with their reasons.
+# Namespace groups are not scrills; their children are. Discovery stops at scrill packages. A
 # project scrill shadowing a different user scrill is process-wide - other scrills' imports get
 # the project one - so py and run say so in one stderr line. A stray <name>.py at a layer root
 # resolves the same way (a scrill folder beats it within its own layer), joins that notice, and
@@ -97,6 +100,7 @@
 import datetime
 import fcntl
 import glob
+import importlib.machinery
 import importlib.util
 import json
 import keyword
@@ -170,24 +174,23 @@ def warn_foreign(foreign):
         print(f"scrills: ignoring {foreign[0]} as the project layer - owned by uid {foreign[1]}, not you", file=sys.stderr)
 
 
-def warn_shadows(found):
-    layered = dict(found)
-    project, user = layered.get("project"), layered.get("user")
-    if not project or not user:
-        return
-    user_side = providers(user)
+def warn_shadows(inventory):
     names = []
-    for name, entry in sorted(providers(project).items()):
-        theirs = user_side.get(name)
-        if theirs is None or os.path.realpath(entry) == os.path.realpath(theirs):
+    for name, node in sorted(inventory["nodes"].items()):
+        if node["kind"] == "group" or node["layer"] != "project":
             continue
-        names.append(name if os.path.basename(entry) == "__init__.py" else f"{name} (a stray {os.path.basename(entry)})")
+        if any(item["kind"] != "group" and item["layer"] == "user"
+               and os.path.realpath(item["entry"]) != os.path.realpath(node["entry"])
+               for item in node["providers"]):
+            names.append(name if node["kind"] == "scrill" else f"{name} (a stray {os.path.basename(node['entry'])})")
     if names:
         print(
             f"scrills: project scrills shadow user ones for this run: {', '.join(names)}"
             " (process-wide - imports inside other scrills get the project one)",
             file=sys.stderr,
         )
+    for conflict in inventory["conflicts"]:
+        print("scrills: " + conflict, file=sys.stderr)
 
 
 def caller_project(home, found):
@@ -209,103 +212,99 @@ def warn_lost_project(home, found):
         )
 
 
-def scan(directory):
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return {}
-    found = {}
-    for name in names:
-        if name.startswith(("_", ".")) or not name.isidentifier():
-            continue
-        entry = os.path.join(directory, name, "__init__.py")
-        if os.path.isfile(entry):
-            found[name] = entry
-    return found
-
-
-def stray_scan(directory):
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return {}
-    found = {}
-    for filename in names:
-        stem, extension = os.path.splitext(filename)
-        if extension == ".py" and not filename.startswith(("_", ".")) and stem.isidentifier():
-            found[stem] = os.path.join(directory, filename)
-    return found
-
-
-def ignored_entries(directory):
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return []
-    found = []
-    for name in names:
-        if name.startswith(("_", ".")):
-            continue
-        entry = os.path.join(directory, name)
-        if not os.path.isdir(entry):
-            continue
-        init = os.path.join(entry, "__init__.py")
-        if not name.isidentifier():
-            if os.path.lexists(init) or os.path.lexists(os.path.join(entry, "README.md")):
-                found.append((name, "not a valid Python identifier - the folder name is the import name; rename it, e.g. - to _"))
-            continue
-        if os.path.isfile(init):
-            continue
-        if os.path.lexists(init):
-            found.append((name, "__init__.py is a dangling symlink or not a file"))
-        elif os.path.lexists(os.path.join(entry, "README.md")):
-            found.append((name, "a manual without an entry - add __init__.py to make it a scrill (today it imports as an empty namespace package)"))
-        else:
-            try:
-                has_python = any(item.endswith(".py") for item in os.listdir(entry))
-            except OSError as error:
-                found.append((name, f"cannot inspect the folder: {error.strerror or error}"))
-                continue
-            if has_python:
-                found.append((name, "no __init__.py - __init__.py is always the entry (today it imports as an empty namespace package)"))
-    return found
-
-
-def known_names(found_layers):
-    known = {}
-    for _, directory in found_layers:
-        for name in providers(directory):
-            known.setdefault(name, name)
-    return sorted(known)
-
-
-def providers(directory):
-    merged = dict(stray_scan(directory))
-    merged.update(scan(directory))
-    return merged
-
-
-def resolved_providers(found_layers):
-    merged = {}
-    for label, directory in found_layers:
-        for name, entry in providers(directory).items():
-            merged.setdefault(
-                name,
-                {"name": name, "entry": entry, "layer": label, "stray": os.path.basename(entry) != "__init__.py"},
-            )
-    return merged
-
-
 def library(found_layers):
-    merged = {}
-    shadowed = []
-    for label, directory in found_layers:
-        for name, entry in scan(directory).items():
-            if name in merged:
-                shadowed.append((name, label))
-            else:
-                merged[name] = {"name": name, "entry": entry, "layer": label}
-    return merged, shadowed
+    inventory = {"nodes": {}, "ignored": [], "conflicts": []}
+    nodes, ignored = inventory["nodes"], inventory["ignored"]
+    suffixes = (importlib.machinery.EXTENSION_SUFFIXES
+                + importlib.machinery.SOURCE_SUFFIXES
+                + importlib.machinery.BYTECODE_SUFFIXES)
+
+    def walk(parents, prefix=""):
+        candidates = {}
+        for parent in parents:
+            directory, label = parent["entry"], parent["layer"]
+            real = os.path.realpath(directory)
+            if real in parent["ancestors"]:
+                ignored.append((prefix, label, "namespace symlink cycle - branch not followed"))
+                continue
+            try:
+                filenames = sorted(os.listdir(directory))
+            except OSError as error:
+                ignored.append((prefix or directory, label, f"cannot inspect the folder: {error.strerror or error}"))
+                continue
+            ancestors = (*parent["ancestors"], real)
+            names = set()
+            for filename in filenames:
+                if filename.startswith(("_", ".")):
+                    continue
+                path = os.path.join(directory, filename)
+                if os.path.isdir(path):
+                    if filename.isidentifier():
+                        names.add(filename)
+                    else:
+                        name = f"{prefix}.{filename}" if prefix else filename
+                        ignored.append((name, label, "not a valid Python identifier - each folder name is an import component; rename it, e.g. - to _"))
+                for suffix in suffixes:
+                    if filename.endswith(suffix):
+                        stem = filename[:-len(suffix)]
+                        if stem.isidentifier() and not stem.startswith("_"):
+                            names.add(stem)
+                        break
+            for part in sorted(names):
+                name = f"{prefix}.{part}" if prefix else part
+                folder = os.path.join(directory, part)
+                entries = []
+                is_directory = os.path.isdir(folder)
+                initializers = [os.path.join(folder, "__init__" + suffix) for suffix in suffixes] if is_directory else []
+                init = next((path for path in initializers if os.path.isfile(path)), None)
+                if init is not None:
+                    entries.append(("scrill" if os.path.basename(init) == "__init__.py" else "stray", init))
+                entries.extend(("stray", os.path.join(directory, part + suffix))
+                               for suffix in suffixes if os.path.isfile(os.path.join(directory, part + suffix)))
+                if is_directory and init is None:
+                    entries.append(("group", folder))
+                for kind, entry in entries:
+                    candidates.setdefault(name, []).append(
+                        {"name": name, "kind": kind, "entry": entry, "layer": label, "ancestors": ancestors})
+        count = 0
+        for name, choices in sorted(candidates.items()):
+            winner = next((item for item in choices if item["kind"] != "group"), choices[0])
+            nodes[name] = {**winner, "providers": choices}
+            if winner["kind"] != "group":
+                count += winner["kind"] == "scrill"
+                for item in choices:
+                    if item["kind"] == "group":
+                        kind = "scrill" if winner["kind"] == "scrill" else "stray module"
+                        inventory["conflicts"].append(
+                            f"{name}  ({item['layer']}, group blocked by {winner['layer']} {kind} {name}; "
+                            "regular Python packages/modules take precedence over namespace groups)")
+                continue
+            children = walk(choices, name)
+            count += children
+            if children:
+                continue
+            for item in choices:
+                if any(entry[:2] == (name, item["layer"]) for entry in ignored):
+                    continue
+                folder = item["entry"]
+                init = os.path.join(folder, "__init__.py")
+                if os.path.lexists(init):
+                    reason = "__init__.py is a dangling symlink or not a file"
+                elif os.path.lexists(os.path.join(folder, "README.md")):
+                    reason = "a manual without an entry - add __init__.py to make it a scrill"
+                elif any(node["kind"] == "stray" and node["name"].rpartition(".")[0] == name for node in nodes.values()):
+                    reason = "no __init__.py - __init__.py is always the scrill entry"
+                else:
+                    continue
+                ignored.append((name, item["layer"], reason))
+        return count
+
+    walk([{"layer": label, "entry": directory, "ancestors": ()} for label, directory in found_layers])
+    return inventory
+
+
+def known_names(inventory):
+    return sorted(name for name, node in inventory["nodes"].items() if node["kind"] != "group")
 
 
 def read_text(path):
@@ -335,23 +334,32 @@ def entry_documents(name, entry):
     manual = reader.read_manual(entry)
     source, notices, error = reader.read_source(entry)
     notices = manual.metadata.notices + notices
-    if keyword.iskeyword(name):
-        notices.append(f"(python keyword - `from scrills import {name}` won't parse; rename, or reach it via run/importlib)")
+    if any(keyword.iskeyword(part) for part in name.split(".")):
+        notices.append(f"(python keyword in {name} - import statements won't parse; rename, or reach it via run/importlib)")
     return manual, source, notices, manual.error or error
 
 
-def resolve_entry(name, found, verb):
-    resolved = resolved_providers(found)
-    provider = resolved.get(name)
-    if provider is not None and provider["stray"]:
-        stray = provider["entry"]
-        fail(f"scrills {verb}: {name} is a stray module - not a scrill; import it from py or fold it into {os.path.join(os.path.dirname(stray), name, '__init__.py')} with a README.md", 2)
-    if provider is None:
-        for _, directory in found:
-            reason = dict(ignored_entries(directory)).get(name)
-            if reason is not None:
+def resolve_entry(name, inventory, verb):
+    parts = name.split(".")
+    if any(not part.isidentifier() or part.startswith("_") for part in parts):
+        fail(f"scrills {verb}: {name} is not a valid Python identifier path - use visible dot-separated folder names", 2)
+    nodes = inventory["nodes"]
+    for length in range(1, len(parts)):
+        parent = nodes.get(".".join(parts[:length]))
+        if parent is not None and parent["kind"] != "group":
+            kind = "scrill" if parent["kind"] == "scrill" else "stray module"
+            fail(f"scrills {verb}: {parent['name']} is a {kind}, not a group; its submodules are implementation, not separate scrills", 2)
+    provider = nodes.get(name)
+    if provider is not None and provider["kind"] == "stray":
+        fail(f"scrills {verb}: {name} is a stray module - not a scrill; import it from py or fold it into a folder with __init__.py and README.md ({provider['entry']})", 2)
+    if provider is None or provider["kind"] == "group":
+        for ignored_name, _, reason in inventory["ignored"]:
+            if ignored_name == name:
                 fail(f"scrills {verb}: {name} can't {verb} - {reason}", 2)
-        available = ", ".join(sorted(entry for entry, detail in resolved.items() if not detail["stray"])) or "none yet"
+        available = ", ".join(sorted(entry for entry, detail in nodes.items()
+                                     if detail["kind"] == "scrill" and (provider is None or entry.startswith(name + ".")))) or "none yet"
+        if provider is not None:
+            fail(f"scrills {verb}: {name} is a group, not a scrill (available: {available})", 2)
         fail(f"scrills {verb}: there's no scrill named {name} (available: {available})", 2)
     return provider
 
@@ -362,7 +370,7 @@ def cmd_read(argv):
     name = argv[0]
     _, found, foreign = layers()
     warn_foreign(foreign)
-    provider = resolve_entry(name, found, "read")
+    provider = resolve_entry(name, library(found), "read")
     manual, source, notices, error = entry_documents(name, provider["entry"])
     print(f"scrill: {name}\nlayer: {provider['layer']}\ndirectory: {os.path.dirname(provider['entry'])}")
     print("Reading material, not execution or a security verdict. Follow relevant imports before use.")
@@ -859,7 +867,7 @@ def export_layers(found):
     os.environ["SCRILLS_LAYERS"] = os.pathsep.join(directory for _, directory in found)
 
 
-def execute(home, found, verb, name, layer, argv, boot):
+def execute(home, found, inventory, verb, name, layer, argv, boot):
     python = ensure_runtime(home)
     export_layers(found)
     run_id = os.urandom(8).hex()
@@ -871,7 +879,7 @@ def execute(home, found, verb, name, layer, argv, boot):
         response = None
         runtime_module().notice(2, f"scrills: cannot prepare response history: {error}; running without saved output")
     card, lock_fd = register(home, info)
-    context = boot_ctx(home, verb, card, lock_fd, time.time(), run_id, trace, flags, known_names(found))
+    context = boot_ctx(home, verb, card, lock_fd, time.time(), run_id, trace, flags, known_names(inventory))
     context.update(history=response)
     os.environ["SCRILLS_BOOT_CTX"] = json.dumps(context)
     os.execv(python, [python, *child_flags(home), boot, *argv])
@@ -885,9 +893,10 @@ def cmd_py(argv):
     boot = boot_path()
     home, found, foreign = layers()
     warn_foreign(foreign)
-    warn_shadows(found)
+    inventory = library(found)
+    warn_shadows(inventory)
     warn_lost_project(home, found)
-    execute(home, found, "py", "py", None, [], boot)
+    execute(home, found, inventory, "py", "py", None, [], boot)
 
 
 def cmd_run(argv):
@@ -897,13 +906,14 @@ def cmd_run(argv):
     boot = boot_path()
     home, found, foreign = layers()
     warn_foreign(foreign)
-    warn_shadows(found)
+    inventory = library(found)
+    warn_shadows(inventory)
     warn_lost_project(home, found)
-    provider = resolve_entry(name, found, "run")
+    provider = resolve_entry(name, inventory, "run")
     manual = runtime_module().read_manual(provider["entry"])
     if manual.error is not None:
         fail(f"scrills run: {name} is not ready - {manual.error}", 2)
-    execute(home, found, "run", name, provider["layer"], [name, *argv[1:]], boot)
+    execute(home, found, inventory, "run", name, provider["layer"], [name, *argv[1:]], boot)
 
 
 def cmd_install(argv):
@@ -914,49 +924,47 @@ def cmd_install(argv):
     os.execv(python, [python, *child_flags(home), "-m", "pip", "install", *argv])
 
 
-def stray_modules(found_layers):
-    return [
-        (os.path.basename(path), label, stem)
-        for label, directory in found_layers
-        for stem, path in sorted(stray_scan(directory).items())
-    ]
-
-
 def cmd_list(argv):
     if argv:
         fail(f"scrills list: unknown argument {argv[0]}\n{USAGE}", 2)
     home, found, foreign = layers()
     warn_foreign(foreign)
-    merged, shadowed = library(found)
-    strays = stray_modules(found)
-    ignored = [(label, name, reason) for label, directory in found for name, reason in ignored_entries(directory)]
-    if not merged:
+    inventory = library(found)
+    nodes = inventory["nodes"]
+    if not any(node["kind"] == "scrill" for node in nodes.values()):
         where = " or ".join(directory for _, directory in found) or home
         print(f"no scrills yet; the library is {where}")
-        if not strays and not ignored:
-            return
-    layer_dirs = dict(found)
-    project_strays = {stem for label, directory in found if label == "project" for stem in stray_scan(directory)}
-    for name in sorted(merged):
-        manual, _, notices, _ = entry_documents(name, merged[name]["entry"])
+    for name, node in sorted(nodes.items()):
+        if node["kind"] != "scrill":
+            continue
+        manual, _, notices, _ = entry_documents(name, node["entry"])
         print(f"- {name}: {manual.metadata.description}".rstrip())
         for notice in notices:
             print(f"  {notice}")
-    for name, layer in shadowed:
-        print(f"{name}  ({layer}, shadowed by {merged[name]['layer']})")
-    for filename, layer, stem in strays:
-        beaten = merged.get(stem)
-        if stem in scan(layer_dirs[layer]):
-            print(f"{filename}  ({layer}, stray module - the {stem}/ folder beside it wins; fold it into the folder)")
-        elif layer == "user" and stem in project_strays:
-            print(f"{filename}  (user, stray module - shadowed by the project's {stem}.py; invisible here)")
-        elif layer == "user" and beaten is not None and beaten["layer"] == "project":
-            print(f"{filename}  (user, stray module - shadowed by the project scrill {stem}; invisible here)")
-        elif layer == "project" and beaten is not None and beaten["layer"] == "user":
-            print(f"{filename}  (project, stray module - shadows the user scrill {stem}: imports get this file; fold it into a folder)")
-        else:
-            print(f"{filename}  ({layer}, stray module - importable as scrills.{stem}, invisible here; fold it into a folder)")
-    for label, name, reason in ignored:
+    for name, node in sorted(nodes.items()):
+        for item in node["providers"]:
+            if item["kind"] == "scrill" and node["kind"] == "scrill" and item["layer"] != node["layer"]:
+                print(f"{name}  ({item['layer']}, shadowed by {node['layer']})")
+            if item["kind"] != "stray":
+                continue
+            filename = os.path.basename(item["entry"])
+            prefix = name.rpartition(".")[0]
+            display = f"{prefix}.{filename}" if prefix else filename
+            if node["kind"] == "scrill":
+                if item["layer"] == node["layer"]:
+                    reason = f"the {name}/ folder beside it wins; fold it into the folder"
+                else:
+                    reason = f"shadowed by the {node['layer']} scrill {name}; invisible here"
+            elif item["entry"] != node["entry"]:
+                reason = f"shadowed by the {node['layer']}'s {os.path.basename(node['entry'])}; invisible here"
+            else:
+                beaten = next((entry for entry in node["providers"] if entry["kind"] == "scrill"), None)
+                reason = (f"shadows the {beaten['layer']} scrill {name}: imports get this file; fold it into a folder"
+                          if beaten else f"importable as scrills.{name}, invisible here; fold it into a folder")
+            print(f"{display}  ({item['layer']}, stray module - {reason})")
+    for conflict in inventory["conflicts"]:
+        print(conflict)
+    for name, label, reason in inventory["ignored"]:
         print(f"{name}  ({label}, ignored - {reason})")
 
 

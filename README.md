@@ -162,7 +162,42 @@ stays an ordinary Agent Skill — individual scrill READMEs are not native harne
   with the project it belongs to.
 - **user** — `~/.scrills`, capability that travels with you across projects.
 
-Both are visible everywhere under a project; project wins on a name collision.
+Both are visible everywhere under a project. Namespace groups merge, and project scrills win
+matching qualified names as whole packages. A regular package or module blocks a same-named
+namespace group, even from the user layer; Scrills reports that collision rather than inventing
+different Python import rules.
+
+## Groups
+
+Organize scrills in namespace folders without `__init__.py`:
+
+```text
+.scrills/
+  group1/
+    scrill1/
+      README.md
+      __init__.py
+  standalone/
+    README.md
+    __init__.py
+```
+
+```bash
+scrills read group1.scrill1
+scrills run group1.scrill1
+```
+
+```python
+from scrills.group1 import scrill1
+from scrills import standalone
+```
+
+`list` stays flat and sorted: `- group1.scrill1: description`, then
+`- standalone: description`. Groups have no entry of their own. Nest groups as needed;
+discovery stops at the scrill package, so its implementation modules stay internal.
+README `name` remains the leaf name (`scrill1`). Cross-group imports use
+`from scrills.other_group import another_scrill`; all groups share the same runtime.
+Moving a scrill changes its public import/CLI name; no short-name aliases are inferred.
 
 ## Why
 

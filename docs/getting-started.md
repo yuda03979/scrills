@@ -133,8 +133,46 @@ The anatomy, in order of importance:
 - **The top level holds only imports, constants and defs.** Top-level code runs on every import — every `py` snippet, every importing scrill, and `run` itself — and its output goes wherever that process points. Real work lives in functions or `main()`.
 - Implementation can live in `lib/api.py`, imported as `from .lib.api import x`; longer material belongs in `references/`. Folder names are your choice. A nested `__init__.py` is optional unless that subpackage needs its own exports/documentation; namespace subfolders work. These are conventions, not a format gate — existing flat scrills remain valid.
 - **The folder is yours.** A scrill may carry any files it needs beside `__init__.py` — data, markdown, templates, nested folders. Open them relative to `__file__`, since the working directory belongs to whoever called the scrill.
-- One scrill imports another with `from scrills import <name>`.
+- One scrill imports another with `from scrills import <name>` or `from scrills.<group> import <name>`.
 - A folder name starting with `_` is an invisible draft.
+
+## Organize scrills into groups
+
+A group is a namespace folder **without `__init__.py`**. For example, move the slug
+folder to `.scrills/text/slug/`: its files remain `README.md` and `__init__.py`, and
+its README header still says `name: slug`. The qualified name becomes `text.slug`:
+
+```bash
+scrills read text.slug
+echo "My Title" | scrills run text.slug
+```
+
+```python
+from scrills.text import slug
+```
+
+`list` prints `- text.slug: ...`, not a tree or a separate entry for `text`.
+Groups can nest; their names become dotted prefixes. `read text` and `run text`
+explain that a group is not a scrill. Discovery stops at every scrill package,
+including one missing its README; `slug/lib/` is implementation, not another group.
+
+Inside `.scrills/text/slug/__init__.py`, normal imports compose the library:
+
+```python
+from .lib import helper                  # this scrill's implementation
+from scrills.text import another_scrill  # same group
+from scrills.reports import daily        # different group
+from scrills import standalone           # top level
+```
+
+These names are illustrative. From that entry, `from .. import another_scrill`
+also addresses its parent group; explicit `scrills.…` imports are clearer between
+independently movable scrills. Groups do not isolate environments or dependencies.
+
+Moving a scrill is an API rename: update imports, scheduled commands, README
+command examples and callers. No shorthand aliases or automatic state migration
+are added. For new grouped scrills, use a qualified state directory such as
+`~/.scrills/.state/text.slug/` to avoid collisions.
 
 ## Reading and migration
 
@@ -147,7 +185,14 @@ Older scrills must move their manual and metadata from SKILL.md or the head docs
 - **project**: the nearest `.scrills/` walking up from your cwd — committed and reviewed with the project it belongs to.
 - **user**: `~/.scrills` — capability that travels with you across projects.
 
-Both are visible everywhere under a project; project wins on a name collision. `scrills where` shows both paths, the python, and how to install a package.
+Both are visible everywhere under a project. Namespace groups merge: a project
+`text.slug` overrides the user `text.slug` as a whole package, while a user
+`text.other` remains available. Imports made by user scrills also see that project
+override. A regular package (`text/__init__.py`) or module (`text.py`) blocks the
+namespace group at that prefix, even from the user layer. `list` reports the
+collision; `py` and `run` warn. Keep group layouts consistent or rename the
+conflicting entry. `scrills where` shows both paths, the python, and how to install
+a package.
 
 When a project scrill proves itself and you want it everywhere, promote it by a staged copy:
 
@@ -156,6 +201,11 @@ cp -R .scrills/slug ~/.scrills/_slug && mv ~/.scrills/_slug ~/.scrills/slug
 ```
 
 The `_` prefix keeps the half-copied folder invisible while it lands (drafts don't list), and the final `mv` is atomic — no session ever sees a partial scrill. That two-step is for a *new* name: `mv` (and `cp -R`) onto an existing folder nests instead of replacing — so upgrading an existing copy, or retrying over a stale `_slug`, starts with `rm -rf` of that target (a brief clean absence, never a half-copy). Never symlink a project scrill into `~/.scrills`: through a symlink every edit goes live for every session on the machine, and one broken import in a dev tree breaks them all. Keep the frontmatter version honest — if you copy changed content under the same version, nothing can tell the two apart later; bump first. While you keep developing, the project copy shadows the promoted one inside that project, and `py`/`run` tell you so. To remove one: `rm -rf ~/.scrills/<name>` (anything it kept under `~/.scrills/.state/<name>` stays until you delete that too).
+
+For a grouped scrill, preserve its namespace path during promotion: create the
+destination group without `__init__.py`, stage as `~/.scrills/text/_slug`, then
+rename to `~/.scrills/text/slug`. The same new-name/upgrade rules apply. Removing
+that leaf leaves `~/.scrills/.state/text.slug/` intact.
 
 ## Recover a response without rerunning
 

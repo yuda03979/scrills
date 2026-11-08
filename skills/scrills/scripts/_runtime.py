@@ -233,6 +233,20 @@ def read_source(entry):
     return text, notices, error
 
 
+def imported_roots():
+    """Find the first concrete module below each namespace, including dynamic imports."""
+    roots = {}
+    for fullname, module in sorted(sys.modules.copy().items()):
+        if not fullname.startswith("scrills."):
+            continue
+        name = fullname.removeprefix("scrills.")
+        if any(name.startswith(root + ".") for root in roots):
+            continue
+        if isinstance(getattr(module, "__file__", None), str):
+            roots[name] = module
+    return roots
+
+
 def version_of(module):
     """The declared README version sampled at finalization, not executed-code identity."""
     entry = getattr(module, "__file__", None)
@@ -521,26 +535,26 @@ def boot():
     def _explain_import_error(error):
         try:
             missing = getattr(error, 'name', None) or ''
-            if isinstance(error, ModuleNotFoundError):
-                if missing.startswith('scrills.'):
-                    parts = missing.split('.')
-                    if len(parts) > 1 and parts[1] and parts[1] not in KNOWN:
-                        return 'scrills: no scrill named ' + parts[1] + ' (available: ' + (', '.join(KNOWN) or 'none yet') + ')'
-                    return None
-                if missing and not missing.startswith('.'):
-                    top = missing.split('.')[0]
-                    if top != 'scrills' and top not in KNOWN:
-                        return "scrills: no module named '" + missing + "' - if it is a third-party package, install it with: scrills install " + top
-                return None
-            if isinstance(error, ImportError) and missing == 'scrills':
-                text = str(error)
-                marker = "cannot import name '"
-                if marker not in text:
-                    return None
-                name = text.split(marker, 1)[1].split("'")[0]
-                if name in KNOWN:
+            def scrill_hint(name):
+                roots = set(KNOWN) | set(imported_roots())
+                if any(name == root or name.startswith(root + '.') for root in roots):
                     return None
                 return 'scrills: no scrill named ' + name + ' (available: ' + (', '.join(KNOWN) or 'none yet') + ')'
+            if isinstance(error, ModuleNotFoundError):
+                if missing.startswith('scrills.'):
+                    return scrill_hint(missing.removeprefix('scrills.'))
+                if missing and not missing.startswith('.'):
+                    top = missing.split('.')[0]
+                    if top != 'scrills' and top not in {name.split('.')[0] for name in KNOWN}:
+                        return "scrills: no module named '" + missing + "' - if it is a third-party package, install it with: scrills install " + top
+                return None
+            if isinstance(error, ImportError) and (missing == 'scrills' or missing.startswith('scrills.')):
+                marker = "cannot import name '"
+                message = str(error)
+                if marker in message:
+                    child = message.split(marker, 1)[1].split("'")[0]
+                    parent = missing.removeprefix('scrills').lstrip('.')
+                    return scrill_hint(parent + '.' + child if parent else child)
         except Exception:
             pass
         return None
@@ -590,9 +604,9 @@ def boot():
                 if key in OUTCOME:
                     record[key] = OUTCOME[key]
             try:
-                names = sorted(set(name.split('.')[1] for name in sys.modules if name.startswith('scrills.')))
-                if names:
-                    record['imported'] = dict((name, version_of(sys.modules.get('scrills.' + name))) for name in names)
+                roots = imported_roots()
+                if roots:
+                    record['imported'] = {name: version_of(module) for name, module in roots.items()}
             except Exception:
                 pass
             lock = None
@@ -733,7 +747,9 @@ def boot():
                     print(value, file=sys.stderr)
                     code = 1
             else:
-                print('scrills run: ' + name + ' defines no main(), so it only imports. Use it from py: from scrills import ' + name, file=sys.stderr)
+                parent, _, leaf = name.rpartition('.')
+                package = 'scrills.' + parent if parent else 'scrills'
+                print('scrills run: ' + name + ' defines no main(), so it only imports. Use it from py: from ' + package + ' import ' + leaf, file=sys.stderr)
                 code = 2
         except SystemExit as stop:
             if stop.code is None:

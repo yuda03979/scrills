@@ -71,6 +71,19 @@ manual must be refused, never replaced by a lower user package. Imports themselv
 native Python, not a format gate or sandbox. Registry versions are sampled from README at
 finalization; do not turn this field into an import-time provenance claim.
 
+## Namespace groups
+
+Groups have no `__init__.py`; scrill packages stop discovery even with a missing
+README. Keep the CLI's static inventory aligned with native Python at every path
+component: regular packages/modules beat namespace portions, even from a later
+layer. Do not flatten independently scanned layers or import parents to discover
+children. Keep hidden branches hidden, aliases visible and symlink cycles bounded.
+The same inventory drives list/read/run, shadow warnings and known-name hints.
+Runtime records identify the first concrete module below namespace groups, including
+scrills created during a snippet; groups and implementation submodules are not scrills.
+README names stay local basenames, while public identities are dotted names.
+`_resolver.py` remains native and independent of the inventory.
+
 ## Response history
 
 Save only ordinary stdout/stderr under `.results/<id>/` and return those bytes synchronously
@@ -90,7 +103,7 @@ The two-root-file scrill layout remains authoring guidance, not enforcement.
 uv run --python 3.13 --with pytest==8.4.2 python -m pytest tests/ -q
 ```
 
-Expect **266 passed** on Python 3.13. The suite drives the real CLI as a subprocess against a session-scoped
+The suite includes flat and namespace-group discovery/import coverage on Python 3.13. The suite drives the real CLI as a subprocess against a session-scoped
 scratch `SCRILLS_HOME`, and scrubs inherited `SCRILLS_*` and `TRACEPARENT` so a developer's
 environment can't steer it. **Never let a test spend money or make noise.**
 

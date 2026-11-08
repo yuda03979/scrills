@@ -4,7 +4,7 @@ description: A scrill is a skill that can also carry Python. One folder is knowl
 compatibility: Needs bash and python3 (3.13 or newer) on macOS or Linux (Debian/Ubuntu also need the matching venv package). The `scrills` command (scripts/scrills beside this skill) goes on PATH or is called by path; no other runtime dependencies.
 license: Apache-2.0
 metadata:
-  version: "0.3.8"
+  version: "0.3.9"
 ---
 
 # scrills
@@ -19,24 +19,25 @@ A scrill is a folder with two required files. `README.md` is the manual under a 
     README.md            header (name:, description:, metadata: version:), then the manual
     __init__.py          """Reading notes on X. The material is in references/."""
     references/
-  emails/                library and program
-    README.md
-    __init__.py          fetch(query) and main()
-    lib/
+  communication/         group: no __init__.py
+    emails/              library and program
+      README.md
+      __init__.py        fetch(query) and main()
+      lib/
 ```
 
 ```bash
 scrills read notes                      # both files, nothing imported; for notes this is the whole use
 scrills py <<'PY'                       # one-shot Python; every scrill is importable
-from scrills import emails
+from scrills.communication import emails
 print(emails.fetch("unread from:support"))
 PY
-echo "unread from:support" | scrills run emails    # calls main(); argv, stdin and the exit code pass through
+echo "unread from:support" | scrills run communication.emails    # calls main(); argv, stdin and the exit code pass through
 ```
 
 | Verb | Does |
 |---|---|
-| `list` | One `- name: description` line per scrill, parsed without importing. |
+| `list` | One `- qualified.name: description` line per scrill, sorted and parsed without importing; no group rows. |
 | `read <name>` | Both files in full with absolute paths, without importing. |
 | `py` | Runs the Python on stdin in a fresh interpreter; the last expression echoes. |
 | `run <name> [args]` | Imports the scrill and calls `main()`; without one it exits 2 after the import. |
@@ -45,7 +46,9 @@ echo "unread from:support" | scrills run emails    # calls main(); argv, stdin a
 | `install <pkg>` | `pip install` into the shared environment. |
 | `where` | Both libraries and the Python in use. |
 
-Two libraries: the project one is the nearest `.scrills/` at or above the working directory, the user one is `~/.scrills/` or `$SCRILLS_HOME`. Both are visible under a project. When both hold a name the project scrill wins, also inside imports between scrills, and `py` and `run` warn about it. A scrill is live as soon as its two files exist and is still there next session.
+Groups are namespace folders without `__init__.py`, nested as needed. Use `scrills read communication.emails`, `scrills run communication.emails`, and `from scrills.communication import emails`. README `name` stays `emails`. Discovery stops at a scrill; its internal folders are not separate scrills. Groups cannot be read or run as scrills. Imports between groups are ordinary Python imports.
+
+Two libraries: the project one is the nearest `.scrills/` at or above the working directory, the user one is `~/.scrills/` or `$SCRILLS_HOME`. Both are visible under a project. Namespace groups merge; matching scrills select the project copy as a whole, also inside imports between scrills. A regular package or module blocks a same-named group, even from the user layer. `list` reports collisions; `py` and `run` warn about them. A scrill is live as soon as its two files exist and is still there next session.
 
 A `py` or `run` call returns its stdout and stderr when it ends, not live; the response starts with `scrills: run <id>` on stderr. `history <id>` reads them back without rerunning. Saved output is kept in the user library until deleted by hand and is not redacted. `ps` records execution metadata only, never code, arguments or output.
 
