@@ -2560,7 +2560,7 @@ def test_run_refusal_explains_ignored_folders_and_strays(home, project):
     assert "not a valid Python identifier" in result.stderr
     result = scrills(["run", "skillonly"], home, project)
     assert result.returncode == 2
-    assert "no scrill named skillonly" in result.stderr
+    assert "skillonly is a group, not a scrill" in result.stderr
     result = scrills(["run", "straymod"], home, project)
     assert result.returncode == 2
     assert "stray module" in result.stderr
